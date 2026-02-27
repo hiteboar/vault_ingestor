@@ -1,0 +1,71 @@
+from __future__ import annotations
+import os
+import hashlib
+from pathlib import Path
+from .models import IncomingMedia
+
+CONTENT_TYPE_EXT = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "video/mp4": ".mp4",
+    "video/quicktime": ".mov",
+}
+
+def ext_from_content_type(ct: str) -> str:
+    ct = (ct or "").split(";")[0].strip().lower()
+    return CONTENT_TYPE_EXT.get(ct, ".bin")
+
+def atomic_write(dest: Path, stream, fsync: bool = True) -> None:
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(tmp, "wb") as f:
+        for chunk in stream:
+            if not chunk:
+                continue
+            f.write(chunk)
+        f.flush()
+        if fsync:
+            os.fsync(f.fileno())
+
+    os.replace(tmp, dest)  # rename atómico
+
+def sanitize_context(name: str) -> str:
+    # permite letras, números, guiones y underscores; espacios -> "_"
+    out = []
+    for ch in (name or "").strip():
+        if ch.isalnum() or ch in ("-", "_"):
+            out.append(ch)
+        elif ch.isspace():
+            out.append("_")
+        else:
+            out.append("_")
+    s = "".join(out).strip("_")
+    return s or "default"
+
+def build_bucket_name(dt, context: str) -> str:
+    # YYYY_MM o YYYY_MM_context
+    base = f"{dt.year:04d}_{dt.month:02d}"
+    ctx = sanitize_context(context)
+    if ctx == "default":
+        return base
+    return f"{base}_{ctx}"
+
+def build_destination(base_dir: Path, media: IncomingMedia, context: str = "default") -> Path:
+    dt = media.received_at
+    bucket = build_bucket_name(dt, context)
+
+    ext = ext_from_content_type(media.content_type)
+
+    # id estable por mensaje/archivo
+    seed = f"{media.source}|{media.sender_id}|{media.external_ids}".encode("utf-8", errors="ignore")
+    h = hashlib.sha256(seed).hexdigest()[:12]
+
+    filename = f"{h}{ext}"
+    return base_dir / bucket / filename
+
+def save_media(base_dir: Path, media: IncomingMedia, context: str = "default", fsync: bool = True) -> Path:
+    dest = build_destination(base_dir, media, context=context)
+    atomic_write(dest, media.stream, fsync=fsync)
+    return dest
