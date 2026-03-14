@@ -1,34 +1,43 @@
 # Raspi Vault Storage
 
-# 1. Introduction and Features
+A lightweight **local file storage system** designed to run on personal
+computers, home servers, or Raspberry Pi devices.
 
-This project implements a system for **organized local file storage**,
-designed to run on devices such as personal computers, home servers, or
-Raspberry Pi.
+It allows you to **receive, organize, and manage files automatically**,
+while keeping full control of your own storage.
 
-The system allows you to **centralize the reception and storage of
-files**, automatically organizing them into folders structured by **year
-and month**, while also allowing the creation of **custom subfolders**
-where information can be stored according to the user's needs. Files
-remain stored until the user decides to delete or manage them manually.
+## Features
 
-Additionally, the system includes a **file verification mechanism** that
-helps prevent duplicates and reduces unnecessary storage space usage.
+-   Automatic file organization by **year and month**
+-   Support for **custom folders**
+-   **Duplicate detection** to avoid unnecessary storage usage
+-   Centralized storage accessible from **authorized devices**
+-   Lightweight and suitable for **Raspberry Pi and low-power systems**
+-   Built with **Python**
 
-The goal of the project is to simplify **file management and access from
-different authorized devices**, allowing users to browse, extract, or
-download stored information without depending solely on the device where
-the physical storage is located.
+------------------------------------------------------------------------
 
-The project is developed in **Python** and can run on different types of
-computers and desktop or server operating systems.
+# Table of Contents
 
-## System Requirements
+-   [Requirements](#requirements)
+-   [How It Works](#how-it-works)
+-   [Installation](#installation)
+-   [Running the Service](#running-the-service)
+-   [Logs](#logs)
+-   [Updating](#updating)
+-   [Uninstall](#uninstall)
+-   [Getting Started](#getting-started)
+-   [Using an External Disk (Linux)](#using-an-external-disk-linux)
+-   [License](#license)
+
+------------------------------------------------------------------------
+
+# Requirements
 
 -   Python **3.9+**
 -   Git
 
-Compatible with:
+Supported operating systems:
 
 -   Linux
 -   macOS
@@ -36,13 +45,12 @@ Compatible with:
 
 ------------------------------------------------------------------------
 
-# 2. System Usage
+# How It Works
 
-The system allows receiving and storing files in the configured storage
-directory. Once a file is received, the system automatically processes
-it and saves it following the defined folder structure.
+The system receives files and automatically stores them in the
+configured storage directory.
 
-By default, files are organized by date:
+By default, files are organized using the following structure:
 
     YEAR/MONTH
 
@@ -53,8 +61,8 @@ Example:
      │   ├── 03/
      │   ├── 04/
 
-Additionally, the system allows the use of **custom subfolders** to
-organize information according to user needs.
+You can also use **custom folders** to organize files according to your
+needs.
 
 Example:
 
@@ -64,27 +72,29 @@ Example:
      │   │   ├── 03/
      │   │   ├── 04/
 
-Files will remain stored in the system until the user decides to delete
-them or manage them manually.
+Files remain stored until the user decides to delete or manage them
+manually.
 
-# 3. Installation
+------------------------------------------------------------------------
 
-## 3.1 Clone the repository
+# Installation
+
+## 1. Clone the repository
 
 ``` bash
 git clone https://github.com/usuario/repositorio.git
 cd repositorio
 ```
 
-## 3.2 Create a virtual environment
+## 2. Create a virtual environment
 
 ``` bash
 python3 -m venv venv
 ```
 
-Activate:
+Activate it:
 
-Linux/macOS
+Linux / macOS
 
 ``` bash
 source venv/bin/activate
@@ -96,19 +106,19 @@ Windows
 venv\Scripts\activate
 ```
 
-## 3.3 Install dependencies
+## 3. Install dependencies
 
 ``` bash
 pip install -r requirements.txt
 ```
 
-## 3.5 Configure environment variables
+## 4. Configure environment variables
 
 ``` bash
 cp .env.example .env
 ```
 
-Configure the values in the `.env` file:
+Edit the `.env` file:
 
     STORAGE_DIR=PATH_TO_DIRECTORY
     META_LOG=PATH_TO_DIRECTORY/metadata.jsonl
@@ -117,22 +127,28 @@ Configure the values in the `.env` file:
     ALLOW_COMPRESSED_PHOTOS=false
     MAX_BYTES=0
 
-Where `PATH_TO_DIRECTORY` corresponds to the absolute path of the
-directory you want to use to store all received files.
+Where `PATH_TO_DIRECTORY` is the **absolute path to the storage
+directory**.
 
-## 3.6 Run the project
+------------------------------------------------------------------------
 
-To run the project, simply execute:
+# Running the Project
+
+Start the application with:
 
 ``` bash
 python app.py
 ```
 
-### 3.6.1 Run as an automatic service
+------------------------------------------------------------------------
 
-Edit the file `/etc/systemd/system/storage.service`
+# Running as a System Service (Linux)
 
-Content:
+Create the file:
+
+    /etc/systemd/system/storage.service
+
+Example configuration:
 
     [Unit]
     Description=Storage Service
@@ -147,7 +163,7 @@ Content:
     [Install]
     WantedBy=multi-user.target
 
-Run the following commands to enable the service:
+Enable the service:
 
 ``` bash
 sudo systemctl daemon-reload
@@ -155,14 +171,25 @@ sudo systemctl enable storage.service
 sudo systemctl start storage.service
 ```
 
-## 3.9 Logs
+------------------------------------------------------------------------
+
+# Logs
+
+Check service status:
 
 ``` bash
 sudo systemctl status storage.service
+```
+
+Follow logs in real time:
+
+``` bash
 journalctl -u storage.service -f
 ```
 
-## 3.10 Update
+------------------------------------------------------------------------
+
+# Updating
 
 ``` bash
 git pull
@@ -170,7 +197,9 @@ pip install -r requirements.txt
 sudo systemctl restart storage.service
 ```
 
-## 3.11 Uninstall
+------------------------------------------------------------------------
+
+# Uninstall
 
 ``` bash
 sudo systemctl stop storage.service
@@ -178,17 +207,19 @@ sudo systemctl disable storage.service
 rm -rf repositorio
 ```
 
-# 4. Getting Started
+------------------------------------------------------------------------
 
-## 4.1 Telegram Control Configuration
+# Getting Started
+
+## Telegram Integration
 
 Currently, the system uses a **Telegram bot** to interact with the
 storage.
 
-### Create a Telegram Bot
+### Creating a Telegram Bot
 
-1.  Open Telegram.
-2.  Search for **@BotFather**.
+1.  Open Telegram
+2.  Search for **@BotFather**
 3.  Run:
 
 ```{=html}
@@ -203,15 +234,15 @@ storage.
 ```
     /newbot
 
-5.  Follow the instructions and assign a name to the bot.
+5.  Follow the instructions
 
-BotFather will provide an **access token**.
+BotFather will provide a **bot token**.
 
 Example:
 
     123456789:AAExampleBotTokenExample
 
-### Configure the token
+## Configure the Token
 
 Example using an environment variable:
 
@@ -219,43 +250,51 @@ Example using an environment variable:
 export TELEGRAM_BOT_TOKEN=YOUR_TOKEN_HERE
 ```
 
-### Available Commands (Telegram)
+## Available Commands
 
   Command       Description
-  ------------- --------------------------------------
-  `/start`      Initializes interaction with the bot
-  `/help`       Shows the list of available commands
-  `/folder`     Selects or creates a subfolder
-  `/storage`    Storage information
-  `/list`       Lists files or folders
+  ------------- ---------------------------
+  `/start`      Initialize the bot
+  `/help`       Show available commands
+  `/folder`     Select or create a folder
+  `/storage`    Show storage information
+  `/list`       List files or folders
   `/search`     Search files
   `/download`   Download file
   `/delete`     Delete file
 
-# 5 Using an External Disk (Linux)
+------------------------------------------------------------------------
 
-Use the following commands to find and configure the disk you want to
-use.
+# Using an External Disk (Linux)
 
-Run:
+To locate your disk:
 
 ``` bash
 lsblk
 ```
 
-to find the name of the external disk. In this example we will use
-`/dev/sdX1`. Then create the directory and mount the disk using:
+Example device:
+
+    /dev/sdX1
+
+Mount it:
 
 ``` bash
 sudo mkdir /mnt/storage
 sudo mount /dev/sdX1 /mnt/storage
 ```
 
-## 5.1 Automatic Mount of the External Disk
+## Automatic Mount (fstab)
 
-Run the command `blkid` to obtain the UUID of your external disk.
+Get disk UUID:
 
-Edit the file `/etc/fstab`
+``` bash
+blkid
+```
+
+Edit:
+
+    /etc/fstab
 
 Add:
 
@@ -269,6 +308,6 @@ sudo mount -a
 
 ------------------------------------------------------------------------
 
-# 6. License
+# License
 
 See the `LICENSE` file.
