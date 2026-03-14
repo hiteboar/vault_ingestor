@@ -222,17 +222,15 @@ storage.
 2.  Search for **@BotFather**
 3.  Run:
 
-```{=html}
-<!-- -->
 ```
     /start
+```
 
 4.  Create a new bot:
 
-```{=html}
-<!-- -->
 ```
     /newbot
+```
 
 5.  Follow the instructions
 
