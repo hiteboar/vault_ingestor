@@ -128,6 +128,39 @@ class TelegramAdapter:
             await msg.reply_text("Uso: /original on | /original off | /original")
             return True
 
+        if text.startswith("/download"):
+            parts = text.split(maxsplit=1)
+            if len(parts) < 2 or not parts[1].strip():
+                await msg.reply_text("Uso: /download <nombre_archivo>\nEj: /download a1b2c3d4e5f6.jpg")
+                return True
+            
+            filename = parts[1].strip()
+            
+            await msg.reply_text(f"🔍 Buscando '{filename}'...")
+            
+            # Buscar recursivamente en base_dir
+            found_path = None
+            try:
+                for p in self.base_dir.rglob(filename):
+                    if p.is_file():
+                        found_path = p
+                        break
+            except Exception as e:
+                print(f"[error] Error buscando archivo: {e}")
+            
+            if not found_path:
+                await msg.reply_text("❌ Archivo no encontrado.")
+                return True
+            
+            try:
+                # Enviar de vuelta como Documento para evitar compresión y mantener el nombre
+                await msg.reply_document(document=found_path, filename=found_path.name)
+            except Exception as e:
+                await msg.reply_text(f"❌ Error al enviar el archivo: {e}")
+                print(f"[error] {e}")
+            
+            return True
+
         if text.startswith("/help"):
             current_ctx = self.state_store.get_context(chat_id, self.default_context)
             current_original = self.state_store.get_require_original(chat_id, self.require_original_default)
@@ -144,6 +177,7 @@ class TelegramAdapter:
                 "/folders             → lista carpetas con nombre\n"
                 "/original on|off     → exige original (Documento) o permite Foto\n"
                 "/original            → ver estado\n"
+                "/download <archivo>  → descargar un archivo\n"
             )
             return True
 
