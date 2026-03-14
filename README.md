@@ -250,16 +250,17 @@ export TELEGRAM_BOT_TOKEN=YOUR_TOKEN_HERE
 
 ## Available Commands
 
-  Command       Description
-  ------------- ---------------------------
-  `/start`      Initialize the bot
-  `/help`       Show available commands
-  `/folder`     Select or create a folder
-  `/storage`    Show storage information
-  `/list`       List files or folders
-  `/search`     Search files
-  `/download`   Download file
-  `/delete`     Delete file
+   Command     |   Description 
+   ------------- |  ---------------------------
+  `/start`     |  Initialize the bot
+  `/help`      |  Show available commands
+  `/folder`     | Select or create a folder
+  `/storage`    | Show storage information
+  `/list`       | List files or folders
+  `/search`     | Search files
+  `/download`   | Download file
+  `/delete`     | Delete file
+
 
 ------------------------------------------------------------------------
 
