@@ -286,6 +286,37 @@ class TelegramAdapter:
             await msg.reply_document(document=found, filename=found.name)
             return True
 
+        if text.startswith("/vaultdelete"):
+            parts = text.split(maxsplit=1)
+            if len(parts) < 2 or not parts[1].strip():
+                await msg.reply_text("Uso: /vaultdelete <etiqueta>")
+                return True
+            
+            tag = sanitize_context(parts[1])
+            vault_dir = self.base_dir / "_vault"
+            
+            if not vault_dir.exists() or not vault_dir.is_dir():
+                await msg.reply_text("❌ El baúl está vacío.")
+                return True
+                
+            found = None
+            for p in vault_dir.iterdir():
+                if p.is_file() and p.stem == tag:
+                    found = p
+                    break
+                    
+            if not found:
+                await msg.reply_text(f"❌ No se encontró nada con la etiqueta '{tag}' en el baúl para eliminar.")
+                return True
+            
+            self.state_store.set_pending_action(chat_id, {
+                "action": "confirm_delete",
+                "target": str(found)
+            })
+            
+            await msg.reply_text(f"⚠️ ¿Estás seguro de que deseas eliminar el archivo importante '{tag}' del baúl? (si/no)")
+            return True
+
         if text.startswith("/vaultlist"):
             vault_dir = self.base_dir / "_vault"
             if not vault_dir.exists() or not vault_dir.is_dir():
@@ -326,6 +357,7 @@ class TelegramAdapter:
                 "/delete <ruta>       → elimina archivo o carpeta (pedirá conformación)\n"
                 "/vaultadd <tag>      → prepara para guardar un archivo en el baúl bajo el tag\n"
                 "/vaultget <tag>      → recupera el archivo del baúl\n"
+                "/vaultdelete <tag>   → elimina el archivo del baúl (pedirá confirmación)\n"
                 "/vaultlist           → lista los archivos en tu baúl\n"
             )
             return True
@@ -342,7 +374,7 @@ class TelegramAdapter:
             print(f"[telegram] chat_id={chat.id} type={chat.type}")
 
         if not self._is_allowed(update):
-            await msg.reply_text("⛔ No autorizado.")
+            #await msg.reply_text("⛔ No autorizado.")
             return
 
         handled = await self._handle_command(update, context)
