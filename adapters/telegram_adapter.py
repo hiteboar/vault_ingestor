@@ -14,7 +14,7 @@ from pathlib import Path
 from core.models import IncomingMedia
 from core.pipeline import process_one
 from core.state import ChatStateStore
-from core.storage import sanitize_context
+from core.storage import sanitize_context, atomic_write, ext_from_content_type
 from core.dedup import HashIndex
 
 class TelegramAdapter:
@@ -249,6 +249,63 @@ class TelegramAdapter:
             await msg.reply_text(f"⚠️ ¿Estás seguro de que deseas eliminar este {tipo}: '{rel_path}'? (si/no)")
             return True
 
+        if text.startswith("/vaultadd"):
+            parts = text.split(maxsplit=1)
+            if len(parts) < 2 or not parts[1].strip():
+                await msg.reply_text("Uso: /vaultadd <etiqueta>\nEj: /vaultadd pasaporte")
+                return True
+            
+            tag = sanitize_context(parts[1])
+            self.state_store.set_pending_action(chat_id, {"action": "await_vault", "tag": tag})
+            await msg.reply_text(f"🔐 Modo Baúl activado.\nEnvía ahora el archivo que se guardará con la etiqueta: '{tag}'.")
+            return True
+
+        if text.startswith("/vaultget"):
+            parts = text.split(maxsplit=1)
+            if len(parts) < 2 or not parts[1].strip():
+                await msg.reply_text("Uso: /vaultget <etiqueta>")
+                return True
+            
+            tag = sanitize_context(parts[1])
+            vault_dir = self.base_dir / "_vault"
+            
+            if not vault_dir.exists() or not vault_dir.is_dir():
+                await msg.reply_text("❌ El baúl está vacío.")
+                return True
+                
+            found = None
+            for p in vault_dir.iterdir():
+                if p.is_file() and p.stem == tag:
+                    found = p
+                    break
+                    
+            if not found:
+                await msg.reply_text(f"❌ No se encontró nada con la etiqueta '{tag}' en el baúl.")
+                return True
+                
+            assert found is not None
+            await msg.reply_document(document=found, filename=found.name)
+            return True
+
+        if text.startswith("/vaultlist"):
+            vault_dir = self.base_dir / "_vault"
+            if not vault_dir.exists() or not vault_dir.is_dir():
+                await msg.reply_text("📂 El baúl está vacío.")
+                return True
+                
+            tags = []
+            for p in vault_dir.iterdir():
+                if p.is_file():
+                    tags.append(p.stem)
+                    
+            if not tags:
+                await msg.reply_text("📂 El baúl está vacío.")
+                return True
+                
+            lines = "\n".join(f"- {t}" for t in sorted(tags))
+            await msg.reply_text(f"🔐 Archivos en el baúl ({len(tags)}):\n{lines}")
+            return True
+
         if text.startswith("/help"):
             current_ctx = self.state_store.get_context(chat_id, self.default_context)
             current_original = self.state_store.get_require_original(chat_id, self.require_original_default)
@@ -263,9 +320,14 @@ class TelegramAdapter:
                 "/folder              → muestra carpeta actual\n"
                 "/clearfolder         → vuelve a default\n"
                 "/folders             → lista carpetas con nombre\n"
+                "/downloadfolder <carpeta>  → descarga carpeta en ZIP\n"
                 "/original on|off     → exige original (Documento) o permite Foto\n"
                 "/original            → ver estado\n"
                 "/download <archivo>  → descargar un archivo\n"
+                "/delete <ruta>       → elimina archivo o carpeta (pedirá conformación)\n"
+                "/vaultadd <tag>      → prepara para guardar un archivo en el baúl bajo el tag\n"
+                "/vaultget <tag>      → recupera el archivo del baúl\n"
+                "/vaultlist           → lista los archivos en tu baúl\n"
             )
             return True
 
@@ -384,6 +446,45 @@ class TelegramAdapter:
 
         if self.max_bytes and self.max_bytes > 0 and size_bytes and size_bytes > self.max_bytes:
             await msg.reply_text(f"❌ Archivo demasiado grande ({size_bytes} bytes).")
+            return
+
+        if pending and pending.get("action") == "await_vault":
+            tag = pending.get("tag")
+            self.state_store.clear_pending_action(chat_id)
+            
+            if not tag:
+                await msg.reply_text("❌ Error: Etiqueta no válida en el baúl.")
+                return
+                
+            file_obj = await context.bot.get_file(tg_file.file_id)
+            file_url = file_obj.file_path
+            
+            ext = ext_from_content_type(content_type)
+            vault_dir = self.base_dir / "_vault"
+            vault_dir.mkdir(parents=True, exist_ok=True)
+            
+            dest_path = vault_dir / f"{tag}{ext}"
+
+            def stream() -> Iterator[bytes]:
+                with requests.get(file_url, stream=True, timeout=60) as r:
+                    r.raise_for_status()
+                    total = 0
+                    for chunk in r.iter_content(chunk_size=256 * 1024):
+                        if not chunk:
+                            continue
+                        total += len(chunk)
+                        if self.max_bytes and self.max_bytes > 0 and total > self.max_bytes:
+                            raise ValueError("Archivo excede MAX_BYTES durante descarga")
+                        yield chunk
+
+            try:
+                atomic_write(dest_path, stream(), fsync=True)
+                await msg.reply_text(f"✅ Archivo guardado secretamente en el baúl bajo la etiqueta: '{tag}'")
+            except Exception as e:
+                await msg.reply_text(f"❌ Error guardando en el baúl: {e}")
+                print(f"[error] {e}")
+            
+            # Stop further processing
             return
 
         file_obj = await context.bot.get_file(tg_file.file_id)
