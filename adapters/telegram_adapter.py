@@ -9,6 +9,7 @@ from telegram.ext import Application, MessageHandler, ContextTypes, filters
 
 import shutil
 import tempfile
+import uuid
 from pathlib import Path
 
 from core.models import IncomingMedia
@@ -156,11 +157,12 @@ class TelegramAdapter:
                 tmp_dir = self.base_dir / "_tmp"
                 tmp_dir.mkdir(exist_ok=True)
                 
-                with tempfile.NamedTemporaryFile(dir=tmp_dir, prefix=f"{folder_name}_", suffix=".zip", delete=False) as tf:
-                    zip_path = tf.name
+                # Para evitar conflictos de lectura/escritura en Windows con NamedTemporaryFile,
+                # generamos un nombre aleatorio para la ruta base del ZIP
+                base_zip_name = f"{folder_name}_{uuid.uuid4().hex}"
+                base_zip_path = str(tmp_dir / base_zip_name)
                 
-                # shutil.make_archive appends .zip automatically, so we remove the .zip to pass the prefix
-                base_zip_path = str(Path(zip_path).with_suffix(''))
+                # shutil.make_archive añade .zip automáticamente
                 shutil.make_archive(base_zip_path, 'zip', target_dir)
                 
                 final_zip = Path(base_zip_path + ".zip")
@@ -170,9 +172,8 @@ class TelegramAdapter:
                 except Exception as e:
                     await msg.reply_text(f"❌ Error al enviar el ZIP: {e}")
                 finally:
-                    # Limpiar el temporales
+                    # Limpiar el temporal
                     final_zip.unlink(missing_ok=True)
-                    Path(zip_path).unlink(missing_ok=True)
                     
             except Exception as e:
                 await msg.reply_text(f"❌ Error al crear el ZIP: {e}")
