@@ -62,15 +62,16 @@ Example:
      │   ├── 04/
 
 You can also use **custom folders** to organize files according to your
-needs.
+needs. Custom folders bypass the year/month structure and exist directly
+at the root of your storage directory.
 
 Example:
 
     storage/
      ├── trips/
-     │   ├── 2026/
-     │   │   ├── 03/
-     │   │   ├── 04/
+     │   ├── file1.jpg
+     │   ├── file2.mp4
+     ├── documents/
 
 Files remain stored until the user decides to delete or manage them
 manually.
@@ -250,17 +251,22 @@ export TELEGRAM_BOT_TOKEN=YOUR_TOKEN_HERE
 
 ## Available Commands
 
-   Command     |   Description 
-   ------------- |  ---------------------------
-  `/start`     |  Initialize the bot
-  `/help`      |  Show available commands
-  `/folder`     | Select or create a folder
-  `/storage`    | Show storage information
-  `/list`       | List files or folders
-  `/search`     | Search files
-  `/download`   | Download file
-  `/delete`     | Delete file
-
+   Command             |   Description 
+   ------------------- |  ---------------------------
+  `/help`              |  Show available commands and current status
+  `/setfolder <name>`  |  Switch to a specific folder (will create it if it doesn't exist)
+  `/folder`            |  Show the currently active folder
+  `/clearfolder`       |  Return to the default YEAR/MONTH folder structure
+  `/folders`           |  List all available custom folders
+  `/original on\|off`  |  Require original uncompressed documents (`on`) or allow compressed photos (`off`)
+  `/original`          |  Show current original requirement status
+  `/download <file>`   |  Download a specific file by its name and extension
+  `/downloadfolder`    |  Download an entire folder's contents as a ZIP archive
+  `/delete <path>`     |  Delete a file or an entire folder (requires confirmation)
+  `/vaultadd <tag>`    |  Prepare to store the next uploaded file securely in the isolated Vault under the given tag
+  `/vaultget <tag>`    |  Retrieve the file stored in the Vault under the given tag
+  `/vaultlist`         |  List all tags currently stored in the Vault
+  `/vaultdelete <tag>` |  Delete a specific file from the Vault (requires confirmation)
 
 ------------------------------------------------------------------------
 
