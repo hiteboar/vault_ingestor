@@ -7,6 +7,10 @@ import requests
 from telegram import Update
 from telegram.ext import Application, MessageHandler, ContextTypes, filters
 
+import shutil
+import tempfile
+from pathlib import Path
+
 from core.models import IncomingMedia
 from core.pipeline import process_one
 from core.state import ChatStateStore
@@ -166,6 +170,85 @@ class TelegramAdapter:
             
             return True
 
+        if text.startswith("/downloadfolder"):
+            parts = text.split(maxsplit=1)
+            if len(parts) < 2 or not parts[1].strip():
+                await msg.reply_text("Uso: /downloadfolder <nombre_carpeta>\nEj: /downloadfolder viaje_roma")
+                return True
+            
+            folder_name = sanitize_context(parts[1])
+            target_dir = self.base_dir / folder_name
+            
+            if not target_dir.exists() or not target_dir.is_dir():
+                await msg.reply_text(f"❌ La carpeta '{folder_name}' no existe.")
+                return True
+            
+            await msg.reply_text(f"📦 Comprimiendo carpeta '{folder_name}'...")
+            
+            try:
+                # Comprimir la carpeta en _tmp/
+                tmp_dir = self.base_dir / "_tmp"
+                tmp_dir.mkdir(exist_ok=True)
+                
+                with tempfile.NamedTemporaryFile(dir=tmp_dir, prefix=f"{folder_name}_", suffix=".zip", delete=False) as tf:
+                    zip_path = tf.name
+                
+                # shutil.make_archive appends .zip automatically, so we remove the .zip to pass the prefix
+                base_zip_path = str(Path(zip_path).with_suffix(''))
+                shutil.make_archive(base_zip_path, 'zip', target_dir)
+                
+                final_zip = Path(base_zip_path + ".zip")
+                
+                try:
+                    await msg.reply_document(document=final_zip, filename=f"{folder_name}.zip")
+                except Exception as e:
+                    await msg.reply_text(f"❌ Error al enviar el ZIP: {e}")
+                finally:
+                    # Limpiar el temporales
+                    final_zip.unlink(missing_ok=True)
+                    Path(zip_path).unlink(missing_ok=True)
+                    
+            except Exception as e:
+                await msg.reply_text(f"❌ Error al crear el ZIP: {e}")
+                print(f"[error] {e}")
+            
+            return True
+
+        # ---- NUEVO: /delete ----
+        if text.startswith("/delete"):
+            parts = text.split(maxsplit=1)
+            if len(parts) < 2 or not parts[1].strip():
+                await msg.reply_text("Uso: /delete <nombre_archivo_o_carpeta>")
+                return True
+            
+            target_name = parts[1].strip()
+            
+            # Busqueda
+            found_path = None
+            try:
+                for p in self.base_dir.rglob(target_name):
+                    # Check that found file/folder matches exact name
+                    if p.name == target_name:
+                        found_path = p
+                        break
+            except Exception as e:
+                print(f"[error] Error buscando objetivo: {e}")
+            
+            if not found_path:
+                await msg.reply_text("❌ Archivo o carpeta no encontrado.")
+                return True
+            
+            rel_path = found_path.relative_to(self.base_dir).as_posix()
+            
+            self.state_store.set_pending_action(chat_id, {
+                "action": "confirm_delete",
+                "target": str(found_path)
+            })
+            
+            tipo = "carpeta" if found_path.is_dir() else "archivo"
+            await msg.reply_text(f"⚠️ ¿Estás seguro de que deseas eliminar este {tipo}: '{rel_path}'? (si/no)")
+            return True
+
         if text.startswith("/help"):
             current_ctx = self.state_store.get_context(chat_id, self.default_context)
             current_original = self.state_store.get_require_original(chat_id, self.require_original_default)
@@ -223,6 +306,32 @@ class TelegramAdapter:
                     return
                 else:
                     await msg.reply_text("Por favor responde 'si' o 'no' a la pregunta del /setfolder pendiente.")
+                    return
+            
+            elif pending.get("action") == "confirm_delete":
+                if ans in ("si", "sí", "s", "yes", "y"):
+                    target_str = pending.get("target")
+                    self.state_store.clear_pending_action(chat_id)
+                    if target_str:
+                        target = Path(target_str)
+                        if target.exists():
+                            try:
+                                if target.is_dir():
+                                    shutil.rmtree(target)
+                                else:
+                                    target.unlink()
+                                await msg.reply_text("✅ Eliminado con éxito.")
+                            except Exception as e:
+                                await msg.reply_text(f"❌ Error al eliminar: {e}")
+                        else:
+                            await msg.reply_text("❌ El objetivo ya no existe.")
+                    return
+                elif ans in ("no", "n"):
+                    self.state_store.clear_pending_action(chat_id)
+                    await msg.reply_text("❌ Eliminación cancelada.")
+                    return
+                else:
+                    await msg.reply_text("Por favor responde 'si' o 'no' para confirmar la eliminación.")
                     return
 
         sender = update.effective_user
