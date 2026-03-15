@@ -11,6 +11,11 @@ import shutil
 import tempfile
 import uuid
 from pathlib import Path
+from typing import Iterator, Optional, Set, List
+
+import requests
+from telegram import Update, InputMediaPhoto
+from telegram.ext import Application, MessageHandler, ContextTypes, filters
 
 from core.models import IncomingMedia
 from core.pipeline import process_one
@@ -68,6 +73,12 @@ class TelegramAdapter:
     def _fmt_original_status(self, require_original: bool) -> str:
         return "ON (solo Documento/Archivo, sin compresión)" if require_original else "OFF (permite Foto, puede comprimirse)"
 
+    def _is_admin(self, update: Update) -> bool:
+        if self.allowed_chat_ids is None:
+            return True
+        user_id = update.effective_user.id
+        return user_id in self.allowed_chat_ids
+
     async def _handle_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         msg = update.effective_message
         chat = update.effective_chat
@@ -79,6 +90,35 @@ class TelegramAdapter:
             return False
 
         chat_id = str(chat.id)
+        is_admin = self._is_admin(update)
+        allowed_folders = self.state_store.get_allowed_folders(chat_id)
+
+        if text.startswith("/invite"):
+            if not is_admin:
+                await msg.reply_text("⛔ Sólo administradores.")
+                return True
+            parts = text.split(maxsplit=1)
+            if len(parts) < 2:
+                await msg.reply_text("Uso: /invite <carpeta>")
+                return True
+            folder = sanitize_context(parts[1])
+            code = self.state_store.create_invite(folder)
+            await msg.reply_text(f"🎟️ Invitación creada para la carpeta '{folder}'.\nEl invitado debe usar:\n\n/join {code}")
+            return True
+
+        if text.startswith("/join"):
+            parts = text.split()
+            if len(parts) < 2:
+                await msg.reply_text("Uso: /join <código>")
+                return True
+            code = parts[1].strip()
+            folder = self.state_store.claim_invite(chat_id, code)
+            if not folder:
+                await msg.reply_text("❌ Código de invitación inválido o ya usado.")
+                return True
+            self.state_store.set_context(chat_id, folder)
+            await msg.reply_text(f"✅ Has sido invitado a la carpeta '{folder}'. Tu carpeta activa es ahora '{folder}'.")
+            return True
 
         if text.startswith("/setfolder"):
             parts = text.split(maxsplit=1)
@@ -86,6 +126,11 @@ class TelegramAdapter:
                 await msg.reply_text("Uso: /setfolder nombre_carpeta\nEj: /setfolder viaje_roma")
                 return True
             ctx = sanitize_context(parts[1])
+            
+            if not is_admin and ctx not in allowed_folders:
+                await msg.reply_text(f"⛔ No estás invitado a la carpeta '{ctx}'.")
+                return True
+                
             target_dir = self.base_dir / ctx
             
             if target_dir.exists() and target_dir.is_dir() and ctx != self.state_store.get_context(chat_id, self.default_context):
@@ -99,11 +144,21 @@ class TelegramAdapter:
             return True
 
         if text.startswith("/clearfolder"):
+            if not is_admin:
+                await msg.reply_text("⛔ Sólo administradores.")
+                return True
             self.state_store.clear_context(chat_id)
             await msg.reply_text(f"📁 Carpeta activa: {self.default_context}")
             return True
 
         if text.startswith("/folders"):
+            if not is_admin:
+                lines = "\n".join(f"- {f}" for f in sorted(allowed_folders))
+                if not lines:
+                    lines = "(ninguna)"
+                await msg.reply_text(f"📂 Carpetas permitidas ({len(allowed_folders)}):\n{lines}")
+                return True
+                
             contexts = self._list_named_contexts()
             if not contexts:
                 await msg.reply_text("📂 No hay carpetas con nombre todavía.")
@@ -118,6 +173,10 @@ class TelegramAdapter:
             return True
 
         if text.startswith("/original"):
+            if not is_admin:
+                await msg.reply_text("⛔ Sólo administradores.")
+                return True
+                
             parts = text.split(maxsplit=1)
             if len(parts) == 1:
                 current = self.state_store.get_require_original(chat_id, self.require_original_default)
@@ -216,6 +275,10 @@ class TelegramAdapter:
 
         # ---- NUEVO: /delete ----
         if text.startswith("/delete"):
+            if not is_admin:
+                await msg.reply_text("⛔ Sólo administradores.")
+                return True
+                
             parts = text.split(maxsplit=1)
             if len(parts) < 2 or not parts[1].strip():
                 await msg.reply_text("Uso: /delete <nombre_archivo_o_carpeta>")
@@ -250,6 +313,9 @@ class TelegramAdapter:
             return True
 
         if text.startswith("/vaultadd"):
+            if not is_admin:
+                await msg.reply_text("⛔ Sólo administradores.")
+                return True
             parts = text.split(maxsplit=1)
             if len(parts) < 2 or not parts[1].strip():
                 await msg.reply_text("Uso: /vaultadd <etiqueta>\nEj: /vaultadd pasaporte")
@@ -261,6 +327,9 @@ class TelegramAdapter:
             return True
 
         if text.startswith("/vaultget"):
+            if not is_admin:
+                await msg.reply_text("⛔ Sólo administradores.")
+                return True
             parts = text.split(maxsplit=1)
             if len(parts) < 2 or not parts[1].strip():
                 await msg.reply_text("Uso: /vaultget <etiqueta>")
@@ -288,6 +357,9 @@ class TelegramAdapter:
             return True
 
         if text.startswith("/vaultdelete"):
+            if not is_admin:
+                await msg.reply_text("⛔ Sólo administradores.")
+                return True
             parts = text.split(maxsplit=1)
             if len(parts) < 2 or not parts[1].strip():
                 await msg.reply_text("Uso: /vaultdelete <etiqueta>")
@@ -318,7 +390,82 @@ class TelegramAdapter:
             await msg.reply_text(f"⚠️ ¿Estás seguro de que deseas eliminar el archivo importante '{tag}' del baúl? (si/no)")
             return True
 
+        if text.startswith("/preview"):
+            parts = text.split()
+            if len(parts) < 2:
+                await msg.reply_text("Uso: /preview <carpeta> [pagina]\nEj: /preview viaje_roma 1")
+                return True
+                
+            folder_name = sanitize_context(parts[1])
+            
+            if not is_admin and folder_name not in allowed_folders:
+                await msg.reply_text(f"⛔ No tienes acceso a la carpeta '{folder_name}'.")
+                return True
+                
+            target_dir = self.base_dir / folder_name
+            
+            if not target_dir.exists() or not target_dir.is_dir():
+                await msg.reply_text(f"❌ La carpeta '{folder_name}' no existe.")
+                return True
+                
+            page = 1
+            if len(parts) >= 3 and parts[2].isdigit():
+                page = int(parts[2])
+                if page < 1:
+                    page = 1
+            
+            limit = 10
+            
+            # Recolectar imágenes
+            image_extensions = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+            images: List[Path] = []
+            try:
+                for p in target_dir.iterdir():
+                    if p.is_file() and p.suffix.lower() in image_extensions:
+                        images.append(p)
+            except Exception as e:
+                print(f"[error] Leyendo carpeta para preview: {e}")
+                
+            if not images:
+                await msg.reply_text(f"❌ No se encontraron imágenes en la carpeta '{folder_name}'.")
+                return True
+                
+            # Ordenarlas para consistencia (por fecha de modificación o nombre)
+            images.sort(key=lambda x: x.name)
+            
+            total_images = len(images)
+            total_pages = (total_images + limit - 1) // limit
+            
+            if page > total_pages:
+                page = total_pages
+                
+            start_idx = (page - 1) * limit
+            end_idx = start_idx + limit
+            
+            subset = images[start_idx:end_idx]
+            
+            # Agrupar en álbum (MediaGroup)
+            media_group = []
+            for img in subset:
+                with open(img, "rb") as f:
+                    media_group.append(InputMediaPhoto(media=open(img, "rb")))
+                    
+            try:
+                await msg.reply_text(f"🖼️ Mostrando {len(subset)} de {total_images} imágenes.\nCarpeta: '{folder_name}' - Página {page}/{total_pages}")
+                await context.bot.send_media_group(chat_id=chat.id, media=media_group)
+                
+                if page < total_pages:
+                    await msg.reply_text(f"👉 Usa `/preview {folder_name} {page+1}` para ver la siguiente página.")
+            except Exception as e:
+                await msg.reply_text(f"❌ Error al enviar la preview: {e}")
+                print(f"[error] {e}")
+
+            return True
+
         if text.startswith("/vaultlist"):
+            if not is_admin:
+                await msg.reply_text("⛔ Sólo administradores.")
+                return True
             vault_dir = self.base_dir / "_vault"
             if not vault_dir.exists() or not vault_dir.is_dir():
                 await msg.reply_text("📂 El baúl está vacío.")
@@ -355,6 +502,8 @@ class TelegramAdapter:
                 "/original on|off     → exige original (Documento) o permite Foto\n"
                 "/original            → ver estado\n"
                 "/download <archivo>  → descargar un archivo\n"
+                "/downloadfolder <carpeta>  → descarga carpeta en ZIP\n"
+                "/preview <carpeta> [pag] → previsualiza imágenes de una carpeta\n"
                 "/delete <ruta>       → elimina archivo o carpeta (pedirá conformación)\n"
                 "/vaultadd <tag>      → prepara para guardar un archivo en el baúl bajo el tag\n"
                 "/vaultget <tag>      → recupera el archivo del baúl\n"
@@ -383,6 +532,14 @@ class TelegramAdapter:
             return
 
         chat_id = str(chat.id) if chat else "unknown"
+        is_admin = self._is_admin(update)
+        allowed_folders = self.state_store.get_allowed_folders(chat_id)
+        current_ctx = self.state_store.get_context(chat_id, self.default_context)
+
+        # Check permissions for upload
+        if not is_admin and current_ctx not in allowed_folders:
+            await msg.reply_text("⛔ No tienes permisos para subir archivos a la carpeta activa actual. Usa /setfolder para moverte a una carpeta a la que estés invitado.")
+            return
 
         pending = self.state_store.get_pending_action(chat_id)
         if pending and msg.text:

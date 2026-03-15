@@ -80,3 +80,34 @@ class ChatStateStore:
         if "pending_action" in chat:
             chat.pop("pending_action", None)
             self._save()
+
+    # ---- Invitations & Access ----
+    def create_invite(self, folder: str) -> str:
+        import string, random
+        if "_invites" not in self._state:
+            self._state["_invites"] = {}
+        chars = string.ascii_uppercase + string.digits
+        code = ''.join(random.choices(chars, k=8))
+        self._state["_invites"][code] = folder
+        self._save()
+        return code
+
+    def claim_invite(self, chat_id: str, code: str) -> Optional[str]:
+        invites = self._state.get("_invites", {})
+        if code not in invites:
+            return None
+        folder = invites.pop(code)
+        
+        chat = self._chat(chat_id)
+        if "allowed_folders" not in chat:
+            chat["allowed_folders"] = []
+            
+        if folder not in chat["allowed_folders"]:
+            chat["allowed_folders"].append(folder)
+            
+        self._save()
+        return folder
+
+    def get_allowed_folders(self, chat_id: str) -> list[str]:
+        chat = self._chat(chat_id)
+        return chat.get("allowed_folders", [])
