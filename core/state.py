@@ -49,7 +49,7 @@ class ChatStateStore:
     def clear_context(self, chat_id: str) -> None:
         chat = self._chat(chat_id)
         if "context" in chat:
-            del chat["context"]
+            chat.pop("context", None)
             self._save()
 
     # ---- Require original ----
@@ -64,3 +64,19 @@ class ChatStateStore:
         chat = self._chat(chat_id)
         chat["require_original"] = bool(require_original)
         self._save()
+
+    # ---- Pending action ----
+    def get_pending_action(self, chat_id: str) -> Optional[Dict[str, Any]]:
+        chat = self._chat(chat_id)
+        return chat.get("pending_action")
+
+    def set_pending_action(self, chat_id: str, action: Dict[str, Any]) -> None:
+        chat = self._chat(chat_id)
+        chat["pending_action"] = action
+        self._save()
+
+    def clear_pending_action(self, chat_id: str) -> None:
+        chat = self._chat(chat_id)
+        if "pending_action" in chat:
+            chat.pop("pending_action", None)
+            self._save()

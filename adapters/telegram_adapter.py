@@ -13,8 +13,6 @@ from core.state import ChatStateStore
 from core.storage import sanitize_context
 from core.dedup import HashIndex
 
-BUCKET_NAMED_RE = re.compile(r"^\d{4}_\d{2}_(.+)$")  # YYYY_MM_<context>
-
 class TelegramAdapter:
     def __init__(
         self,
@@ -53,10 +51,9 @@ class TelegramAdapter:
                 name = p.name
                 if name in ("_tmp", "state", "dedup"):
                     continue
-                m = BUCKET_NAMED_RE.match(name)
-                if not m:
+                if re.match(r"^\d{4}$", name):
                     continue
-                ctx = sanitize_context(m.group(1))
+                ctx = sanitize_context(name)
                 if ctx and ctx != "default":
                     contexts.add(ctx)
         except Exception:
@@ -84,7 +81,15 @@ class TelegramAdapter:
                 await msg.reply_text("Uso: /setfolder nombre_carpeta\nEj: /setfolder viaje_roma")
                 return True
             ctx = sanitize_context(parts[1])
+            target_dir = self.base_dir / ctx
+            
+            if target_dir.exists() and target_dir.is_dir() and ctx != self.state_store.get_context(chat_id, self.default_context):
+                self.state_store.set_pending_action(chat_id, {"action": "confirm_setfolder", "folder": ctx})
+                await msg.reply_text(f"⚠️ La carpeta '{ctx}' ya existe.\n¿Quieres moverte a la carpeta ya existente? (si/no)")
+                return True
+
             self.state_store.set_context(chat_id, ctx)
+            self.state_store.clear_pending_action(chat_id)
             await msg.reply_text(f"📁 Carpeta activa: {ctx}")
             return True
 
@@ -199,6 +204,26 @@ class TelegramAdapter:
         handled = await self._handle_command(update, context)
         if handled:
             return
+
+        chat_id = str(chat.id) if chat else "unknown"
+
+        pending = self.state_store.get_pending_action(chat_id)
+        if pending and msg.text:
+            ans = msg.text.strip().lower()
+            if pending.get("action") == "confirm_setfolder":
+                if ans in ("si", "sí", "s", "yes", "y"):
+                    folder = pending.get("folder")
+                    self.state_store.set_context(chat_id, folder)
+                    self.state_store.clear_pending_action(chat_id)
+                    await msg.reply_text(f"📁 Carpeta activa: {folder}")
+                    return
+                elif ans in ("no", "n"):
+                    self.state_store.clear_pending_action(chat_id)
+                    await msg.reply_text("❌ Acción cancelada.")
+                    return
+                else:
+                    await msg.reply_text("Por favor responde 'si' o 'no' a la pregunta del /setfolder pendiente.")
+                    return
 
         sender = update.effective_user
         sender_id = str(sender.id) if sender else "unknown"

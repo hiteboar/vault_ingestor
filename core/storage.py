@@ -44,17 +44,14 @@ def sanitize_context(name: str) -> str:
     s = "".join(out).strip("_")
     return s or "default"
 
-def build_bucket_name(dt, context: str) -> str:
-    # YYYY_MM o YYYY_MM_context
-    base = f"{dt.year:04d}_{dt.month:02d}"
-    ctx = sanitize_context(context)
-    if ctx == "default":
-        return base
-    return f"{base}_{ctx}"
-
 def build_destination(base_dir: Path, media: IncomingMedia, context: str = "default") -> Path:
     dt = media.received_at
-    bucket = build_bucket_name(dt, context)
+    ctx = sanitize_context(context)
+
+    if ctx == "default":
+        bucket_path = Path(f"{dt.year:04d}") / f"{dt.month:02d}"
+    else:
+        bucket_path = Path(ctx)
 
     ext = ext_from_content_type(media.content_type)
 
@@ -63,7 +60,7 @@ def build_destination(base_dir: Path, media: IncomingMedia, context: str = "defa
     h = hashlib.sha256(seed).hexdigest()[:12]
 
     filename = f"{h}{ext}"
-    return base_dir / bucket / filename
+    return base_dir / bucket_path / filename
 
 def save_media(base_dir: Path, media: IncomingMedia, context: str = "default", fsync: bool = True) -> Path:
     dest = build_destination(base_dir, media, context=context)
