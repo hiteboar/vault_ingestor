@@ -152,6 +152,45 @@ sudo systemctl start vault.service
 
 ---
 
+## 🔄 Updating
+
+To update to the latest version of the code:
+
+```bash
+# Get the latest changes
+git pull
+
+# Update dependencies if needed
+pip install -r requirements.txt
+
+# Restart the service (if using systemd)
+sudo systemctl restart vault.service
+```
+
+---
+
+## 🗑️ Uninstalling
+
+To completely remove the project:
+
+1. **Stop and remove the service** (if installed):
+```bash
+sudo systemctl stop vault.service
+sudo systemctl disable vault.service
+sudo rm /etc/systemd/system/vault.service
+sudo systemctl daemon-reload
+```
+
+2. **Remove the project directory**:
+```bash
+cd ..
+rm -rf vault-ingestor
+```
+
+*(Note: This will not delete your `STORAGE_DIR` unless it was located inside the project folder.)*
+
+---
+
 ## 📄 License
 
 This project is open-source under the MIT License. See `LICENSE` for details.
