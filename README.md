@@ -1,318 +1,157 @@
-# Raspi Vault Storage
+# Raspi Vault Ingestor 🛡️📦
 
-A lightweight **local file storage system** designed to run on personal
-computers, home servers, or Raspberry Pi devices.
+A lightweight, personal **media ingestor and vault** designed for home servers, personal computers, or Raspberry Pi devices. This project allows you to capture, organize, and secure your files effortlessly via a Telegram Bot interface while maintaining 100% control over your data.
 
-It allows you to **receive, organize, and manage files automatically**,
-while keeping full control of your own storage.
+## 🚀 Key Features
 
-## Features
+- **Automated Organization**: Files are sorted by **Year/Month** by default.
+- **Custom Folders (Contexts)**: Create specific directories for events, trips, or projects.
+- **Deduplication**: Built-in hash-based detection to prevent storing identical files twice.
+- **Telegram Interface**: Complete control through a robust set of bot commands.
+- **Invitation System**: Securely invite other users to upload or access specific folders without granting full server access.
+- **Secure Vault**: An isolated storage area for sensitive files with tagged retrieval.
+- **Media Preview**: Quickly browse through images stored in any folder directly from Telegram.
+- **Original Quality**: Toggle between original uncompressed documents and standard photo uploads.
 
--   Automatic file organization by **year and month**
--   Support for **custom folders**
--   **Duplicate detection** to avoid unnecessary storage usage
--   Centralized storage accessible from **authorized devices**
--   Lightweight and suitable for **Raspberry Pi and low-power systems**
--   Built with **Python**
+---
 
-------------------------------------------------------------------------
+## 📋 Requirements
 
-# Table of Contents
+- **Python 3.9+**
+- **Git**
+- **Telegram Bot Token** (from [@BotFather](https://t.me/botfather))
 
--   [Requirements](#requirements)
--   [How It Works](#how-it-works)
--   [Installation](#installation)
--   [Running the Service](#running-the-service)
--   [Logs](#logs)
--   [Updating](#updating)
--   [Uninstall](#uninstall)
--   [Getting Started](#getting-started)
--   [Using an External Disk (Linux)](#using-an-external-disk-linux)
--   [License](#license)
+---
 
-------------------------------------------------------------------------
+## 🛠️ Installation
 
-# Requirements
-
--   Python **3.9+**
--   Git
-
-Supported operating systems:
-
--   Linux
--   macOS
--   Windows
-
-------------------------------------------------------------------------
-
-# How It Works
-
-The system receives files and automatically stores them in the
-configured storage directory.
-
-By default, files are organized using the following structure:
-
-    YEAR/MONTH
-
-Example:
-
-    storage/
-     ├── 2026/
-     │   ├── 03/
-     │   ├── 04/
-
-You can also use **custom folders** to organize files according to your
-needs. Custom folders bypass the year/month structure and exist directly
-at the root of your storage directory.
-
-Example:
-
-    storage/
-     ├── trips/
-     │   ├── file1.jpg
-     │   ├── file2.mp4
-     ├── documents/
-
-Files remain stored until the user decides to delete or manage them
-manually.
-
-------------------------------------------------------------------------
-
-# Installation
-
-## 1. Clone the repository
-
-``` bash
-git clone https://github.com/usuario/repositorio.git
-cd repositorio
+### 1. Clone the repository
+```bash
+git clone https://github.com/your-username/vault-ingestor.git
+cd vault-ingestor
 ```
 
-## 2. Create a virtual environment
-
-``` bash
-python3 -m venv venv
-```
-
-Activate it:
-
-Linux / macOS
-
-``` bash
+### 2. Setup Virtual Environment
+```bash
+python -m venv venv
+# Linux / macOS
 source venv/bin/activate
+# Windows
+.\venv\Scripts\activate
 ```
 
-Windows
-
-``` bash
-venv\Scripts\activate
-```
-
-## 3. Install dependencies
-
-``` bash
+### 3. Install Dependencies
+```bash
 pip install -r requirements.txt
 ```
 
-## 4. Configure environment variables
-
-``` bash
+### 4. Configuration
+Create a `.env` file from the example:
+```bash
 cp .env.example .env
 ```
 
-Edit the `.env` file:
+Edit your `.env` with the following variables:
+- `TELEGRAM_BOT_TOKEN`: Your Bot Token from @BotFather.
+- `STORAGE_DIR`: Absolute path where files will be stored.
+- `ALLOWED_CHAT_IDS`: Comma-separated list of Telegram User IDs allowed to use the bot.
+- `DEFAULT_CONTEXT`: Folder name for default uploads (e.g., `default`).
+- `META_LOG`: (Optional) Path to the metadata journal file.
+- `MAX_BYTES`: (Optional) Maximum file size in bytes (0 for no limit).
+- `ALLOW_COMPRESSED_PHOTOS`: (Optional) Set to `true` to allow regular photo uploads by default.
 
-    STORAGE_DIR=PATH_TO_DIRECTORY
-    META_LOG=PATH_TO_DIRECTORY/metadata.jsonl
+---
 
-    DEFAULT_CONTEXT=default
-    ALLOW_COMPRESSED_PHOTOS=false
-    MAX_BYTES=0
+## 🤖 Usage & Bot Commands
 
-Where `PATH_TO_DIRECTORY` is the **absolute path to the storage
-directory**.
-
-------------------------------------------------------------------------
-
-# Running the Project
-
-Start the application with:
-
-``` bash
+Start the bot:
+```bash
 python app.py
 ```
 
-------------------------------------------------------------------------
+### Authorization & Sharing
+| Command | Description |
+|:--- |:--- |
+| `/invite <folder>` | (Admin only) Generates a unique invitation code for a specific folder. |
+| `/join <code>` | Use a code to gain access to a shared folder. |
 
-# Running as a System Service (Linux)
+### Folder Management
+| Command | Description |
+|:--- |:--- |
+| `/setfolder <name>` | Switch to a specific folder. Creates it if it doesn't exist. |
+| `/folder` | Show the currently active folder. |
+| `/folders` | List all custom folders you have access to. |
+| `/clearfolder` | Reset to the default structure. |
 
-Create the file:
+### File Retrieval & Media
+| Command | Description |
+|:--- |:--- |
+| `/preview <folder> [pag]` | Browse thumbnails of images in a folder. |
+| `/download <filename>` | Search and download a specific file. |
+| `/downloadfolder <name>` | Export an entire folder as a `.zip` archive. |
 
-    /etc/systemd/system/storage.service
+### Security & Vault
+| Command | Description |
+|:--- |:--- |
+| `/vaultadd <tag>` | Prepare to save the next file securely in the Vault under `<tag>`. |
+| `/vaultget <tag>` | Retrieve a file from the Vault by its tag. |
+| `/vaultlist` | List all secrets saved in the Vault. |
+| `/vaultdelete <tag>` | Remove a secret from the Vault (requires confirmation). |
+| `/delete <path>` | Delete a file or folder in the general storage (requires confirmation). |
 
-Example configuration:
+### System
+| Command | Description |
+|:--- |:--- |
+| `/original on\|off` | Toggle requirement for uncompressed "File" uploads. |
+| `/help` | Display command list and current status. |
 
-    [Unit]
-    Description=Storage Service
-    After=network.target
+---
 
-    [Service]
-    User=user
-    WorkingDirectory=/path/to/project
-    ExecStart=/path/to/project/venv/bin/python app.py
-    Restart=always
+## 📂 Storage Structure
 
-    [Install]
-    WantedBy=multi-user.target
+By default, the server organizes files as follows:
+```text
+storage/
+ ├── 2026/
+ │   ├── 03/
+ │   │   └── file.jpg
+ ├── trips/           <-- Custom Folder
+ │   └── vacation.mp4
+ └── _vault/          <-- Isolated Secrets
+     └── passport.pdf
+```
 
-Enable the service:
+---
 
-``` bash
+## ⚙️ Running as a Service (Linux)
+
+To keep the ingestor running in the background, create a systemd service:
+
+1. Create `/etc/systemd/system/vault.service`:
+```ini
+[Unit]
+Description=Vault Ingestor Bot
+After=network.target
+
+[Service]
+User=your-user
+WorkingDirectory=/path/to/vault-ingestor
+ExecStart=/path/to/vault-ingestor/venv/bin/python app.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+2. Enable and start:
+```bash
 sudo systemctl daemon-reload
-sudo systemctl enable storage.service
-sudo systemctl start storage.service
+sudo systemctl enable vault.service
+sudo systemctl start vault.service
 ```
 
-------------------------------------------------------------------------
+---
 
-# Logs
+## 📄 License
 
-Check service status:
-
-``` bash
-sudo systemctl status storage.service
-```
-
-Follow logs in real time:
-
-``` bash
-journalctl -u storage.service -f
-```
-
-------------------------------------------------------------------------
-
-# Updating
-
-``` bash
-git pull
-pip install -r requirements.txt
-sudo systemctl restart storage.service
-```
-
-------------------------------------------------------------------------
-
-# Uninstall
-
-``` bash
-sudo systemctl stop storage.service
-sudo systemctl disable storage.service
-rm -rf repositorio
-```
-
-------------------------------------------------------------------------
-
-# Getting Started
-
-## Telegram Integration
-
-Currently, the system uses a **Telegram bot** to interact with the
-storage.
-
-### Creating a Telegram Bot
-
-1.  Open Telegram
-2.  Search for **@BotFather**
-3.  Run:
-
-```
-    /start
-```
-
-4.  Create a new bot:
-
-```
-    /newbot
-```
-
-5.  Follow the instructions
-
-BotFather will provide a **bot token**.
-
-Example:
-
-    123456789:AAExampleBotTokenExample
-
-## Configure the Token
-
-Example using an environment variable:
-
-``` bash
-export TELEGRAM_BOT_TOKEN=YOUR_TOKEN_HERE
-```
-
-## Available Commands
-
-   Command             |   Description 
-   ------------------- |  ---------------------------
-  `/help`              |  Show available commands and current status
-  `/setfolder <name>`  |  Switch to a specific folder (will create it if it doesn't exist)
-  `/folder`            |  Show the currently active folder
-  `/clearfolder`       |  Return to the default YEAR/MONTH folder structure
-  `/folders`           |  List all available custom folders
-  `/original on\|off`  |  Require original uncompressed documents (`on`) or allow compressed photos (`off`)
-  `/original`          |  Show current original requirement status
-  `/download <file>`   |  Download a specific file by its name and extension
-  `/downloadfolder`    |  Download an entire folder's contents as a ZIP archive
-  `/delete <path>`     |  Delete a file or an entire folder (requires confirmation)
-  `/vaultadd <tag>`    |  Prepare to store the next uploaded file securely in the isolated Vault under the given tag
-  `/vaultget <tag>`    |  Retrieve the file stored in the Vault under the given tag
-  `/vaultlist`         |  List all tags currently stored in the Vault
-  `/vaultdelete <tag>` |  Delete a specific file from the Vault (requires confirmation)
-
-------------------------------------------------------------------------
-
-# Using an External Disk (Linux)
-
-To locate your disk:
-
-``` bash
-lsblk
-```
-
-Example device:
-
-    /dev/sdX1
-
-Mount it:
-
-``` bash
-sudo mkdir /mnt/storage
-sudo mount /dev/sdX1 /mnt/storage
-```
-
-## Automatic Mount (fstab)
-
-Get disk UUID:
-
-``` bash
-blkid
-```
-
-Edit:
-
-    /etc/fstab
-
-Add:
-
-    UUID=XXXXXXXX /mnt/storage ext4 defaults,nofail 0 2
-
-Test:
-
-``` bash
-sudo mount -a
-```
-
-------------------------------------------------------------------------
-
-# License
-
-See the `LICENSE` file.
+This project is open-source under the MIT License. See `LICENSE` for details.
