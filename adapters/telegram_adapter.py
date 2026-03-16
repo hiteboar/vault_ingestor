@@ -187,12 +187,14 @@ class TelegramAdapter:
         await msg.reply_text("Uso: /original on | /original off | /original")
         return True
 
-    async def _cmd_downloadfolder(self, msg, args: str) -> bool:
-        if not args:
-            await msg.reply_text("Uso: /downloadfolder <nombre_carpeta>\nEj: /downloadfolder viaje_roma")
+    async def _cmd_downloadfolder(self, msg, chat_id: str, args: str) -> bool:
+        current_ctx = self.state_store.get_context(chat_id, self.default_context)
+        folder_name = sanitize_context(args.split()[0]) if args else current_ctx
+        
+        if folder_name == "default":
+            await msg.reply_text("⚠️ Estás en la carpeta 'default'. Especifica una carpeta: /downloadfolder <carpeta>")
             return True
         
-        folder_name = sanitize_context(args)
         target_dir = self.base_dir / folder_name
         
         if not target_dir.exists() or not target_dir.is_dir():
@@ -359,13 +361,14 @@ class TelegramAdapter:
         await msg.reply_text(f"⚠️ ¿Estás seguro de que deseas eliminar el archivo importante '{tag}' del baúl? (si/no)")
         return True
 
-    async def _cmd_preview(self, msg, chat, args: str, is_admin: bool, allowed_folders: set, context: ContextTypes.DEFAULT_TYPE) -> bool:
-        if not args:
-            await msg.reply_text("Uso: /preview <carpeta>\nEj: /preview viaje_roma")
+    async def _cmd_preview(self, msg, chat, chat_id: str, args: str, is_admin: bool, allowed_folders: set, context: ContextTypes.DEFAULT_TYPE) -> bool:
+        current_ctx = self.state_store.get_context(chat_id, self.default_context)
+        folder_name = sanitize_context(args.split()[0]) if args else current_ctx
+        
+        if folder_name == "default":
+            await msg.reply_text("⚠️ Estás en la carpeta 'default'. Especifica una carpeta: /preview <carpeta>")
             return True
             
-        folder_name = sanitize_context(args.split()[0])
-        
         if not is_admin and folder_name not in allowed_folders:
             return True
             
@@ -437,32 +440,80 @@ class TelegramAdapter:
         await msg.reply_text(f"🔐 Archivos en el baúl ({len(tags)}):\n{lines}")
         return True
 
+    async def _cmd_list(self, msg, chat_id: str, args: str, is_admin: bool, allowed_folders: set) -> bool:
+        current_ctx = self.state_store.get_context(chat_id, self.default_context)
+        folder_name = sanitize_context(args.split()[0]) if args else current_ctx
+        
+        if folder_name == "default":
+            await msg.reply_text("⚠️ Estás en la carpeta 'default'. Especifica una carpeta: /list <carpeta>")
+            return True
+            
+        if not is_admin and folder_name not in allowed_folders:
+            return True
+            
+        target_dir = self.base_dir / folder_name
+        
+        if not target_dir.exists() or not target_dir.is_dir():
+            await msg.reply_text(f"❌ La carpeta '{folder_name}' no existe.")
+            return True
+            
+        files = []
+        try:
+            for p in target_dir.iterdir():
+                if p.is_file():
+                    size_kb = p.stat().st_size / 1024
+                    files.append(f"📄 `{p.name}` ({size_kb:.1f} KB)")
+        except Exception as e:
+            print(f"[error] Leyendo carpeta para list: {e}")
+            
+        if not files:
+            await msg.reply_text(f"📂 La carpeta '{folder_name}' está vacía.")
+            return True
+            
+        files.sort()
+        lines = "\n".join(files)
+        await msg.reply_text(f"📂 Archivos en '{folder_name}':\n{lines}")
+        return True
+
     async def _cmd_help(self, msg, chat_id: str) -> bool:
         current_ctx = self.state_store.get_context(chat_id, self.default_context)
         current_original = self.state_store.get_require_original(chat_id, self.require_original_default)
 
-        await msg.reply_text(
-            "Estado actual:\n"
-            f"📁 Carpeta: {current_ctx}\n"
-            f"📷 Original: {self._fmt_original_status(current_original)}\n"
-            "\n"
-            "Comandos:\n"
-            "/setfolder <nombre>  → cambia carpeta\n"
-            "/folder              → muestra carpeta actual\n"
-            "/clearfolder         → vuelve a default\n"
-            "/folders             → lista carpetas con nombre\n"
-            "/downloadfolder <carpeta>  → descarga carpeta en ZIP\n"
-            "/original on|off     → exige original (Documento) o permite Foto\n"
-            "/original            → ver estado\n"
-            "/download <archivo>  → descargar un archivo\n"
-            "/downloadfolder <carpeta>  → descarga carpeta en ZIP\n"
-            "/preview <carpeta> [pag] → previsualiza imágenes de una carpeta\n"
-            "/delete <ruta>       → elimina archivo o carpeta (pedirá conformación)\n"
-            "/vaultadd <tag>      → prepara para guardar un archivo en el baúl bajo el tag\n"
-            "/vaultget <tag>      → recupera el archivo del baúl\n"
-            "/vaultdelete <tag>   → elimina el archivo del baúl (pedirá confirmación)\n"
-            "/vaultlist           → lista los archivos en tu baúl\n"
+        help_text = (
+            f"📍 *Estado Actual*\n"
+            f"📁 Carpeta: `{current_ctx}`\n"
+            f"📷 Original: {self._fmt_original_status(current_original)}\n\n"
+            
+            "📂 *Gestión de Carpetas*\n"
+            "/setfolder <nombre> → Cambia de carpeta activa\n"
+            "/folder              → Muestra la carpeta actual\n"
+            "/clearfolder         → Vuelve a la carpeta default\n"
+            "/folders             → Lista todas tus carpetas\n\n"
+            
+            "🎟️ *Acceso*\n"
+            "/invite <nombre>    → Crea invitación (Admin)\n"
+            "/join <código>      → Unirse a una carpeta\n\n"
+            
+            "📦 *Archivos y Vistas*\n"
+            "/list <carpeta?>      → Lista archivos de una carpeta\n"
+            "/preview <carpeta?>   → Miniaturas aleatorias (10)\n"
+            "/download <archivo>   → Descarga un archivo concreto\n"
+            "/downloadfolder <c?>  → Descarga carpeta en ZIP\n"
+            "/delete <ruta>        → Elimina archivo o carpeta\n\n"
+            
+            "🔐 *Baúl Seguro (Vault)*\n"
+            "/vaultadd <tag>      → Guarda archivo en baúl\n"
+            "/vaultget <tag>      → Recupera archivo de baúl\n"
+            "/vaultdelete <tag>   → Elimina archivo de baúl\n"
+            "/vaultlist           → Lista archivos del baúl\n\n"
+            
+            "🔧 *Configuración*\n"
+            "/original on|off     → Calidad de imagen (ON/OFF)\n"
+            "/help                → Muestra este menú\n\n"
+            "_Nota: Si no especificas <carpeta> en los comandos marcados con '?', se usará tu carpeta actual._"
         )
+        
+        await msg.reply_text(help_text, parse_mode="Markdown")
         return True
 
     async def _handle_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -499,9 +550,11 @@ class TelegramAdapter:
         elif command == "/original":
             return await self._cmd_original(msg, chat_id, args, is_admin)
         elif command == "/downloadfolder":
-            return await self._cmd_downloadfolder(msg, args)
+            return await self._cmd_downloadfolder(msg, chat_id, args)
         elif command == "/download":
             return await self._cmd_download(msg, args)
+        elif command == "/list":
+            return await self._cmd_list(msg, chat_id, args, is_admin, allowed_folders)
         elif command == "/delete":
             return await self._cmd_delete(msg, chat_id, args, is_admin)
         elif command == "/vaultadd":
@@ -511,7 +564,7 @@ class TelegramAdapter:
         elif command == "/vaultdelete":
             return await self._cmd_vaultdelete(msg, chat_id, args, is_admin)
         elif command == "/preview":
-            return await self._cmd_preview(msg, chat, args, is_admin, allowed_folders, context)
+            return await self._cmd_preview(msg, chat, chat_id, args, is_admin, allowed_folders, context)
         elif command == "/vaultlist":
             return await self._cmd_vaultlist(msg, is_admin)
         elif command == "/help":
