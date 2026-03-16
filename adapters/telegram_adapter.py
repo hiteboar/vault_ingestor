@@ -97,11 +97,20 @@ class TelegramAdapter:
             await msg.reply_text("⛔ Solo administradores pueden crear invitaciones.")
             return True
         if not args:
-            await msg.reply_text("Uso: /invite <carpeta>")
+            await msg.reply_text("Uso: /invite <carpeta> [etiqueta]\nEj: /invite boda_pepito Pepito")
             return True
-        folder = sanitize_context(args)
-        code = self.state_store.create_invite(folder)
-        await msg.reply_text(f"🎟️ Invitación creada para la carpeta '{folder}'.\nEl invitado debe usar:\n\n/join {code}")
+            
+        parts = args.split(maxsplit=1)
+        folder = sanitize_context(parts[0])
+        tag = parts[1] if len(parts) > 1 else f"invitado_{datetime.now(timezone.utc).strftime('%H%M%S')}"
+        
+        code = self.state_store.create_invite(folder, tag)
+        await msg.reply_text(
+            f"🎟️ Invitación creada para la carpeta '{folder}'.\n"
+            f"🏷️ Etiqueta: {tag}\n"
+            f"⏳ Válida por: 24 horas\n"
+            f"El invitado debe usar:\n\n/join {code}"
+        )
         return True
 
     async def _cmd_join(self, msg, chat_id: str, args: str) -> bool:
@@ -469,6 +478,55 @@ class TelegramAdapter:
         await msg.reply_text(f"🔐 Archivos en el baúl ({len(tags)}):\n{lines}")
         return True
 
+    async def _cmd_access(self, msg, is_admin: bool) -> bool:
+        if not is_admin:
+            await msg.reply_text("⛔ Solo administradores pueden ver la lista de accesos.")
+            return True
+            
+        report = self.state_store.get_access_report()
+        
+        text = "🎟️ *Control de Acceso*\n\n"
+        
+        # Pendientes
+        text += "⏳ *Invitaciones Pendientes (24h)*:\n"
+        if not report["pending"]:
+            text += "_No hay códigos activos_\n"
+        else:
+            for p in report["pending"]:
+                created = datetime.fromisoformat(p["created_at"])
+                # Calcular tiempo restante aprox
+                rem = 24 - (datetime.now(timezone.utc) - created).total_seconds() / 3600
+                text += f"- `{p['code']}` → {p['folder']} | {p['tag']} ({rem:.1f}h rest.)\n"
+        
+        text += "\n👥 *Usuarios con Acceso*:\n"
+        if not report["active"]:
+            text += "_No hay usuarios externos registrados_\n"
+        else:
+            for a in report["active"]:
+                text += f"- User: `{a['chat_id']}` | Carpeta: `{a['folder']}` | Tag: `{a['tag']}`\n"
+                
+        text += "\n_Usa /revoke <ID|tag> para quitar un acceso._"
+        await msg.reply_text(text, parse_mode="Markdown")
+        return True
+
+    async def _cmd_revoke(self, msg, args: str, is_admin: bool) -> bool:
+        if not is_admin:
+            await msg.reply_text("⛔ Solo administradores pueden revocar accesos.")
+            return True
+            
+        if not args:
+            await msg.reply_text("Uso: /revoke <ID_usuario | Tag_etiqueta>")
+            return True
+            
+        target = args.strip()
+        success = self.state_store.revoke_access(target)
+        
+        if success:
+            await msg.reply_text(f"✅ Acceso revocado para: '{target}'")
+        else:
+            await msg.reply_text(f"❌ No se encontró ningún acceso con: '{target}'")
+        return True
+
     async def _cmd_list(self, msg, chat_id: str, args: str, is_admin: bool, allowed_folders: set) -> bool:
         current_ctx = self.state_store.get_context(chat_id, self.default_context)
         folder_name = sanitize_context(args.split()[0]) if args else current_ctx
@@ -537,7 +595,9 @@ class TelegramAdapter:
         if is_admin:
             help_text += (
                 "🎟️ *Acceso*\n"
-                "/invite <nombre>    → Crea invitación (Admin)\n"
+                "/invite <c> [tag]   → Crea invitación (24h)\n"
+                "/access             → Lista de códigos y usuarios\n"
+                "/revoke <ID|tag>    → Quita el acceso a un usuario\n"
                 "/join <código>      → Unirse a una carpeta\n\n"
             )
         else:
@@ -598,6 +658,10 @@ class TelegramAdapter:
 
         if command == "/invite":
             return await self._cmd_invite(msg, args, is_admin)
+        elif command == "/access":
+            return await self._cmd_access(msg, is_admin)
+        elif command == "/revoke":
+            return await self._cmd_revoke(msg, args, is_admin)
         elif command == "/join":
             return await self._cmd_join(msg, chat_id, args)
         elif command == "/setfolder":
