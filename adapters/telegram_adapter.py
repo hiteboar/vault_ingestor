@@ -2,6 +2,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Iterator, Optional, Set
 import re
+import random
 
 import requests
 from telegram import Update
@@ -54,15 +55,27 @@ class TelegramAdapter:
 
     def _list_named_contexts(self) -> list[str]:
         contexts = set()
+        system_dirs = {"_tmp", "state", "dedup", "_vault"}
         try:
             for p in self.base_dir.iterdir():
                 if not p.is_dir():
                     continue
                 name = p.name
-                if name in ("_tmp", "state", "dedup"):
+                # Ocultar carpetas ocultas (.) y carpetas de sistema/vault
+                if name.startswith(".") or name in system_dirs or "vault" in name.lower():
                     continue
+                # Ocultar carpetas que son solo números (buckets por fecha)
                 if re.match(r"^\d{4}$", name):
                     continue
+                
+                # Ocultar carpetas vacías
+                try:
+                    contains_files = any(f.is_file() for f in p.iterdir())
+                    if not contains_files:
+                        continue
+                except Exception:
+                    continue
+
                 ctx = sanitize_context(name)
                 if ctx and ctx != "default":
                     contexts.add(ctx)
@@ -347,12 +360,11 @@ class TelegramAdapter:
         return True
 
     async def _cmd_preview(self, msg, chat, args: str, is_admin: bool, allowed_folders: set, context: ContextTypes.DEFAULT_TYPE) -> bool:
-        raw_parts = args.split()
-        if not raw_parts:
-            await msg.reply_text("Uso: /preview <carpeta> [pagina]\nEj: /preview viaje_roma 1")
+        if not args:
+            await msg.reply_text("Uso: /preview <carpeta>\nEj: /preview viaje_roma")
             return True
             
-        folder_name = sanitize_context(raw_parts[0])
+        folder_name = sanitize_context(args.split()[0])
         
         if not is_admin and folder_name not in allowed_folders:
             return True
@@ -363,14 +375,6 @@ class TelegramAdapter:
             await msg.reply_text(f"❌ La carpeta '{folder_name}' no existe.")
             return True
             
-        page = 1
-        if len(raw_parts) >= 2 and raw_parts[1].isdigit():
-            page = int(raw_parts[1])
-            if page < 1:
-                page = 1
-        
-        limit = 10
-        
         image_extensions = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
         images: List[Path] = []
         try:
@@ -384,33 +388,31 @@ class TelegramAdapter:
             await msg.reply_text(f"❌ No se encontraron imágenes en la carpeta '{folder_name}'.")
             return True
             
-        images.sort(key=lambda x: x.name)
+        # Seleccionar 10 imágenes al azar (o todas si hay menos de 10)
+        limit = 10
+        subset = random.sample(images, min(len(images), limit))
         
-        total_images = len(images)
-        total_pages = (total_images + limit - 1) // limit
-        
-        if page > total_pages:
-            page = total_pages
-            
-        start_idx = (page - 1) * limit
-        end_idx = start_idx + limit
-        
-        subset = images[start_idx:end_idx]
+        # Sort them by name just for consistency in display even if random
+        subset.sort(key=lambda x: x.name)
         
         media_group = []
-        for img in subset:
-            with open(img, "rb") as f:
-                media_group.append(InputMediaPhoto(media=open(img, "rb")))
-                
+        # Need to keep file handles open until send_media_group finishes
+        files = []
         try:
-            await msg.reply_text(f"🖼️ Mostrando {len(subset)} de {total_images} imágenes.\nCarpeta: '{folder_name}' - Página {page}/{total_pages}")
+            for img in subset:
+                f = open(img, "rb")
+                files.append(f)
+                media_group.append(InputMediaPhoto(media=f))
+                
+            await msg.reply_text(f"🎲 Mostrando {len(subset)} imágenes aleatorias de {len(images)} totales.\nCarpeta: '{folder_name}'")
             await context.bot.send_media_group(chat_id=chat.id, media=media_group)
             
-            if page < total_pages:
-                await msg.reply_text(f"👉 Usa `/preview {folder_name} {page+1}` para ver la siguiente página.")
         except Exception as e:
             await msg.reply_text(f"❌ Error al enviar la preview: {e}")
             print(f"[error] {e}")
+        finally:
+            for f in files:
+                f.close()
 
         return True
 
