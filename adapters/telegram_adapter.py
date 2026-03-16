@@ -94,6 +94,7 @@ class TelegramAdapter:
 
     async def _cmd_invite(self, msg, args: str, is_admin: bool) -> bool:
         if not is_admin:
+            await msg.reply_text("⛔ Solo administradores pueden crear invitaciones.")
             return True
         if not args:
             await msg.reply_text("Uso: /invite <carpeta>")
@@ -139,6 +140,7 @@ class TelegramAdapter:
 
     async def _cmd_clearfolder(self, msg, chat_id: str, is_admin: bool) -> bool:
         if not is_admin:
+            await msg.reply_text("⛔ Solo administradores pueden resetear la carpeta a default.")
             return True
         self.state_store.clear_context(chat_id)
         await msg.reply_text(f"📁 Carpeta activa: {self.default_context}")
@@ -167,6 +169,7 @@ class TelegramAdapter:
 
     async def _cmd_original(self, msg, chat_id: str, args: str, is_admin: bool) -> bool:
         if not is_admin:
+            await msg.reply_text("⛔ Solo administradores pueden cambiar la calidad de subida.")
             return True
             
         if not args:
@@ -187,9 +190,13 @@ class TelegramAdapter:
         await msg.reply_text("Uso: /original on | /original off | /original")
         return True
 
-    async def _cmd_downloadfolder(self, msg, chat_id: str, args: str) -> bool:
+    async def _cmd_downloadfolder(self, msg, chat_id: str, args: str, is_admin: bool, allowed_folders: set) -> bool:
         current_ctx = self.state_store.get_context(chat_id, self.default_context)
         folder_name = sanitize_context(args.split()[0]) if args else current_ctx
+        
+        if not is_admin and folder_name not in allowed_folders:
+            await msg.reply_text(f"⛔ No tienes permiso para acceder a la carpeta '{folder_name}'.")
+            return True
         
         if folder_name == "default":
             await msg.reply_text("⚠️ Estás en la carpeta 'default'. Especifica una carpeta: /downloadfolder <carpeta>")
@@ -227,7 +234,7 @@ class TelegramAdapter:
         
         return True
 
-    async def _cmd_download(self, msg, args: str) -> bool:
+    async def _cmd_download(self, msg, args: str, is_admin: bool, allowed_folders: set) -> bool:
         if not args:
             await msg.reply_text("Uso: /download <nombre_archivo>")
             return True
@@ -239,13 +246,22 @@ class TelegramAdapter:
         try:
             for p in self.base_dir.rglob(filename):
                 if p.is_file():
-                    found_path = p
-                    break
+                    # Para no administradores, verificar que el archivo esté en una carpeta permitida
+                    if not is_admin:
+                        # Verificamos si alguna parte de la ruta relativa coincide con allowed_folders
+                        rel = p.relative_to(self.base_dir)
+                        # El primer componente suele ser el nombre de la carpeta (contexto)
+                        if rel.parts[0] in allowed_folders:
+                            found_path = p
+                            break
+                    else:
+                        found_path = p
+                        break
         except Exception as e:
             print(f"[error] Error buscando archivo: {e}")
         
         if not found_path:
-            await msg.reply_text("❌ Archivo no encontrado.")
+            await msg.reply_text("❌ Archivo no encontrado o no tienes acceso.")
             return True
         
         try:
@@ -256,10 +272,7 @@ class TelegramAdapter:
         
         return True
 
-    async def _cmd_delete(self, msg, chat_id: str, args: str, is_admin: bool) -> bool:
-        if not is_admin:
-            return True
-            
+    async def _cmd_delete(self, msg, chat_id: str, args: str, is_admin: bool, allowed_folders: set) -> bool:
         if not args:
             await msg.reply_text("Uso: /delete <nombre_archivo_o_carpeta>")
             return True
@@ -277,6 +290,17 @@ class TelegramAdapter:
         if not found_path:
             await msg.reply_text("❌ Archivo o carpeta no encontrado.")
             return True
+            
+        # Seguridad: Solo admin o si está dentro de allowed_folders
+        if not is_admin:
+            try:
+                rel = found_path.relative_to(self.base_dir)
+                if rel.parts[0] not in allowed_folders:
+                    await msg.reply_text("⛔ No tienes permiso para eliminar archivos fuera de tus carpetas.")
+                    return True
+            except Exception:
+                await msg.reply_text("⛔ Error de permisos.")
+                return True
         
         rel_path = found_path.relative_to(self.base_dir).as_posix()
         
@@ -291,6 +315,7 @@ class TelegramAdapter:
 
     async def _cmd_vaultadd(self, msg, chat_id: str, args: str, is_admin: bool) -> bool:
         if not is_admin:
+            await msg.reply_text("⛔ El Baúl es solo para administradores.")
             return True
         if not args:
             await msg.reply_text("Uso: /vaultadd <etiqueta>\nEj: /vaultadd pasaporte")
@@ -303,6 +328,7 @@ class TelegramAdapter:
 
     async def _cmd_vaultget(self, msg, args: str, is_admin: bool) -> bool:
         if not is_admin:
+            await msg.reply_text("⛔ El Baúl es solo para administradores.")
             return True
         if not args:
             await msg.reply_text("Uso: /vaultget <etiqueta>")
@@ -331,6 +357,7 @@ class TelegramAdapter:
 
     async def _cmd_vaultdelete(self, msg, chat_id: str, args: str, is_admin: bool) -> bool:
         if not is_admin:
+            await msg.reply_text("⛔ El Baúl es solo para administradores.")
             return True
         if not args:
             await msg.reply_text("Uso: /vaultdelete <etiqueta>")
@@ -370,6 +397,7 @@ class TelegramAdapter:
             return True
             
         if not is_admin and folder_name not in allowed_folders:
+            await msg.reply_text(f"⛔ No tienes permiso para acceder a la carpeta '{folder_name}'.")
             return True
             
         target_dir = self.base_dir / folder_name
@@ -421,6 +449,7 @@ class TelegramAdapter:
 
     async def _cmd_vaultlist(self, msg, is_admin: bool) -> bool:
         if not is_admin:
+            await msg.reply_text("⛔ El Baúl es solo para administradores.")
             return True
         vault_dir = self.base_dir / "_vault"
         if not vault_dir.exists() or not vault_dir.is_dir():
@@ -449,6 +478,7 @@ class TelegramAdapter:
             return True
             
         if not is_admin and folder_name not in allowed_folders:
+            await msg.reply_text(f"⛔ No tienes permiso para acceder a la carpeta '{folder_name}'.")
             return True
             
         target_dir = self.base_dir / folder_name
@@ -475,43 +505,74 @@ class TelegramAdapter:
         await msg.reply_text(f"📂 Archivos en '{folder_name}':\n{lines}")
         return True
 
-    async def _cmd_help(self, msg, chat_id: str) -> bool:
+    async def _cmd_help(self, msg, chat_id: str, is_admin: bool) -> bool:
         current_ctx = self.state_store.get_context(chat_id, self.default_context)
         current_original = self.state_store.get_require_original(chat_id, self.require_original_default)
 
+        # Base del mensaje
         help_text = (
             f"📍 *Estado Actual*\n"
             f"📁 Carpeta: `{current_ctx}`\n"
-            f"📷 Original: {self._fmt_original_status(current_original)}\n\n"
-            
+        )
+        
+        if is_admin:
+            help_text += f"📷 Original: {self._fmt_original_status(current_original)}\n\n"
+        else:
+            help_text += "\n"
+
+        # Categorías
+        help_text += (
             "📂 *Gestión de Carpetas*\n"
             "/setfolder <nombre> → Cambia de carpeta activa\n"
             "/folder              → Muestra la carpeta actual\n"
-            "/clearfolder         → Vuelve a la carpeta default\n"
-            "/folders             → Lista todas tus carpetas\n\n"
-            
-            "🎟️ *Acceso*\n"
-            "/invite <nombre>    → Crea invitación (Admin)\n"
-            "/join <código>      → Unirse a una carpeta\n\n"
-            
+        )
+        
+        if is_admin:
+            help_text += "/clearfolder         → Vuelve a la carpeta default\n"
+            help_text += "/folders             → Lista todas las carpetas\n\n"
+        else:
+            help_text += "/folders             → Lista tus carpetas permitidas\n\n"
+
+        # Acceso
+        if is_admin:
+            help_text += (
+                "🎟️ *Acceso*\n"
+                "/invite <nombre>    → Crea invitación (Admin)\n"
+                "/join <código>      → Unirse a una carpeta\n\n"
+            )
+        else:
+            help_text += (
+                "🎟️ *Acceso*\n"
+                "/join <código>      → Unirse a una carpeta con invitación\n\n"
+            )
+
+        # Archivos
+        help_text += (
             "📦 *Archivos y Vistas*\n"
             "/list <carpeta?>      → Lista archivos de una carpeta\n"
             "/preview <carpeta?>   → Miniaturas aleatorias (10)\n"
             "/download <archivo>   → Descarga un archivo concreto\n"
             "/downloadfolder <c?>  → Descarga carpeta en ZIP\n"
             "/delete <ruta>        → Elimina archivo o carpeta\n\n"
-            
-            "🔐 *Baúl Seguro (Vault)*\n"
-            "/vaultadd <tag>      → Guarda archivo en baúl\n"
-            "/vaultget <tag>      → Recupera archivo de baúl\n"
-            "/vaultdelete <tag>   → Elimina archivo de baúl\n"
-            "/vaultlist           → Lista archivos del baúl\n\n"
-            
-            "🔧 *Configuración*\n"
-            "/original on|off     → Calidad de imagen (ON/OFF)\n"
-            "/help                → Muestra este menú\n\n"
-            "_Nota: Si no especificas <carpeta> en los comandos marcados con '?', se usará tu carpeta actual._"
         )
+
+        # Baúl (Solo Admin)
+        if is_admin:
+            help_text += (
+                "🔐 *Baúl Seguro (Vault)*\n"
+                "/vaultadd <tag>      → Guarda archivo en baúl\n"
+                "/vaultget <tag>      → Recupera archivo de baúl\n"
+                "/vaultdelete <tag>   → Elimina archivo de baúl\n"
+                "/vaultlist           → Lista archivos del baúl\n\n"
+            )
+
+        # Configuración
+        help_text += "🔧 *Configuración*\n"
+        if is_admin:
+            help_text += "/original on|off     → Calidad de imagen (ON/OFF)\n"
+        
+        help_text += "/help                → Muestra este menú\n\n"
+        help_text += "_Nota: Si no especificas <carpeta> en los comandos marcados con '?', se usará tu carpeta activa._"
         
         await msg.reply_text(help_text, parse_mode="Markdown")
         return True
@@ -533,7 +594,7 @@ class TelegramAdapter:
 
         chat_id = str(chat.id)
         is_admin = self._is_admin(update)
-        allowed_folders = self.state_store.get_allowed_folders(chat_id)
+        allowed_folders = set(self.state_store.get_allowed_folders(chat_id))
 
         if command == "/invite":
             return await self._cmd_invite(msg, args, is_admin)
@@ -550,13 +611,13 @@ class TelegramAdapter:
         elif command == "/original":
             return await self._cmd_original(msg, chat_id, args, is_admin)
         elif command == "/downloadfolder":
-            return await self._cmd_downloadfolder(msg, chat_id, args)
+            return await self._cmd_downloadfolder(msg, chat_id, args, is_admin, allowed_folders)
         elif command == "/download":
-            return await self._cmd_download(msg, args)
+            return await self._cmd_download(msg, args, is_admin, allowed_folders)
         elif command == "/list":
             return await self._cmd_list(msg, chat_id, args, is_admin, allowed_folders)
         elif command == "/delete":
-            return await self._cmd_delete(msg, chat_id, args, is_admin)
+            return await self._cmd_delete(msg, chat_id, args, is_admin, allowed_folders)
         elif command == "/vaultadd":
             return await self._cmd_vaultadd(msg, chat_id, args, is_admin)
         elif command == "/vaultget":
@@ -568,7 +629,7 @@ class TelegramAdapter:
         elif command == "/vaultlist":
             return await self._cmd_vaultlist(msg, is_admin)
         elif command == "/help":
-            return await self._cmd_help(msg, chat_id)
+            return await self._cmd_help(msg, chat_id, is_admin)
 
         return False
 
@@ -587,7 +648,7 @@ class TelegramAdapter:
 
         chat_id = str(chat.id) if chat else "unknown"
         is_admin = self._is_admin(update)
-        allowed_folders = self.state_store.get_allowed_folders(chat_id)
+        allowed_folders = set(self.state_store.get_allowed_folders(chat_id))
 
         # Si el usuario no tiene ninguna carpeta permitida y no es admin,
         # su única forma de interactuar es usando /join. Si no, lo ignoramos.
@@ -601,7 +662,7 @@ class TelegramAdapter:
 
         chat_id = str(chat.id) if chat else "unknown"
         is_admin = self._is_admin(update)
-        allowed_folders = self.state_store.get_allowed_folders(chat_id)
+        allowed_folders = set(self.state_store.get_allowed_folders(chat_id))
         current_ctx = self.state_store.get_context(chat_id, self.default_context)
 
         # Check permissions for upload
