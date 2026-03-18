@@ -23,6 +23,7 @@ from core.pipeline import process_one
 from core.state import ChatStateStore
 from core.storage import sanitize_context, atomic_write, ext_from_content_type
 from core.dedup import HashIndex
+from core.agent import VaultAgent
 
 class TelegramAdapter:
     def __init__(
@@ -36,6 +37,7 @@ class TelegramAdapter:
         require_original_default: bool = False,
         allowed_chat_ids: Optional[Set[int]] = None,
         max_bytes: Optional[int] = None,
+        agent: Optional[VaultAgent] = None,
     ):
         self.token = token
         self.base_dir = base_dir
@@ -46,6 +48,7 @@ class TelegramAdapter:
         self.require_original_default = require_original_default
         self.allowed_chat_ids = allowed_chat_ids
         self.max_bytes = max_bytes
+        self.agent = agent
 
     def _is_allowed(self, update: Update) -> bool:
         if not self.allowed_chat_ids:
@@ -543,6 +546,30 @@ class TelegramAdapter:
             await msg.reply_text(f"❌ No se encontró ningún acceso con: '{target}'")
         return True
 
+    async def _cmd_admin(self, msg, chat_id: str, is_admin: bool) -> bool:
+        if not is_admin:
+            await msg.reply_text("⛔ El comando /admin es solo para administradores.")
+            return True
+        if not self.agent:
+            await msg.reply_text("⚠️ El Agente IA no está configurado (falta GEMINI_API_KEY).")
+            return True
+            
+        pending = self.state_store.get_pending_action(chat_id)
+        if pending and pending.get("action") == "admin_session":
+            self.state_store.clear_pending_action(chat_id)
+            self.agent.clear_session(chat_id)
+            await msg.reply_text("🤖 Sesión con el Agente finalizada.")
+        else:
+            self.state_store.set_pending_action(chat_id, {"action": "admin_session"})
+            await msg.reply_text(
+                "🤖 *Agente IA Activado*\n"
+                "Ahora puedes enviarme peticiones directas. Puedo analizar archivos, "
+                "darte estadísticas de almacenamiento o realizar operaciones complejas.\n\n"
+                "_Usa /admin de nuevo para salir._",
+                parse_mode="Markdown"
+            )
+        return True
+
     async def _cmd_list(self, msg, chat_id: str, args: str, is_admin: bool, allowed_folders: set) -> bool:
         current_ctx = self.state_store.get_context(chat_id, self.default_context)
         folder_name = sanitize_context(args.split()[0]) if args else current_ctx
@@ -678,6 +705,8 @@ class TelegramAdapter:
             return await self._cmd_access(msg, is_admin)
         elif command == "/revoke":
             return await self._cmd_revoke(msg, args, is_admin)
+        elif command == "/admin":
+            return await self._cmd_admin(msg, chat_id, is_admin)
         elif command == "/join":
             return await self._cmd_join(msg, chat_id, args)
         elif command == "/setfolder":
@@ -790,6 +819,13 @@ class TelegramAdapter:
                     return
                 else:
                     await msg.reply_text("Por favor responde 'si' o 'no' para confirmar la eliminación.")
+                    return
+            
+            elif pending.get("action") == "admin_session" and msg.text:
+                if not msg.text.startswith("/"): # Ignorar comandos si estamos en sesión
+                    await msg.reply_chat_action("typing")
+                    response = await self.agent.chat(chat_id, msg.text)
+                    await msg.reply_text(response)
                     return
 
         sender = update.effective_user

@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from core.housekeeping import cleanup_part_files
 from core.state import ChatStateStore
 from core.dedup import HashIndex
+from core.agent import VaultAgent
 from adapters.telegram_adapter import TelegramAdapter
 
 def parse_allowed_chat_ids(raw: str) -> set[int] | None:
@@ -64,6 +65,14 @@ def main():
     # Índice dedup
     hash_index = HashIndex(storage_dir / "dedup" / "hash_index.json")
 
+    # Agente IA (Opcional si hay API KEY)
+    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+    agent = VaultAgent(gemini_key, storage_dir=str(storage_dir)) if gemini_key else None
+    if agent:
+        print("[startup] Agente IA configurado y listo.")
+    else:
+        print("[startup] Agente IA no disponible (falta GEMINI_API_KEY).")
+
     adapter = TelegramAdapter(
         token=token,
         base_dir=storage_dir,
@@ -74,6 +83,7 @@ def main():
         require_original_default=require_original_default,
         allowed_chat_ids=allowed_chat_ids,
         max_bytes=max_bytes,
+        agent=agent,
     )
     adapter.run()
 
