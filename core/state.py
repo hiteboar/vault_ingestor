@@ -1,7 +1,9 @@
-from __future__ import annotations
 import json
+import datetime
+import string
+import random
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 class ChatStateStore:
     """
@@ -84,7 +86,6 @@ class ChatStateStore:
 
     # ---- Invitations & Access ----
     def create_invite(self, folder: str, tag: str = "invitado") -> str:
-        import string, random, datetime
         if "_invites" not in self._state:
             self._state["_invites"] = {}
         
@@ -100,7 +101,6 @@ class ChatStateStore:
         return code
 
     def _prune_invites(self) -> None:
-        import datetime
         if "_invites" not in self._state:
             return
         
@@ -137,10 +137,10 @@ class ChatStateStore:
             tag = info["tag"]
         
         chat = self._chat(chat_id)
-        if "access" not in chat or not isinstance(chat["access"], dict):
-            chat["access"] = {}
-            
-        chat["access"][folder] = tag
+        chat["access"][folder] = {
+            "tag": tag,
+            "created_at": info.get("created_at") if isinstance(info, dict) else datetime.datetime.now(datetime.timezone.utc).isoformat()
+        }
         # Limpiar campo antiguo
         chat.pop("allowed_folders", None)
             
@@ -148,11 +148,44 @@ class ChatStateStore:
         return folder
 
     def get_allowed_folders(self, chat_id: str) -> list[str]:
+        self._prune_access(chat_id)
         chat = self._chat(chat_id)
         access = chat.get("access", {})
         if isinstance(access, dict):
             return list(access.keys())
         return []
+
+    def is_user_allowed(self, chat_id: str) -> bool:
+        """Determina si un usuario tiene algún tipo de acceso (invitación activa)."""
+        self._prune_access(chat_id)
+        chat = self._chat(chat_id)
+        access = chat.get("access", {})
+        return bool(access and isinstance(access, dict))
+
+    def _prune_access(self, chat_id: str) -> None:
+        """Elimina accesos que han caducado (si se desea que el acceso dure lo mismo que la invitación)."""
+        chat = self._chat(chat_id)
+        access = chat.get("access", {})
+        if not isinstance(access, dict):
+            return
+            
+        now = datetime.datetime.now(datetime.timezone.utc)
+        to_delete = []
+        for folder, info in access.items():
+            if not isinstance(info, dict) or "created_at" not in info:
+                # Si no tiene metadatos o no es el formato nuevo, lo dejamos (retrocompatibilidad)
+                continue
+            try:
+                created_at = datetime.datetime.fromisoformat(info["created_at"])
+                if (now - created_at).total_seconds() > 24 * 3600:
+                    to_delete.append(folder)
+            except (ValueError, TypeError):
+                continue
+                
+        if to_delete:
+            for f in to_delete:
+                access.pop(f, None)
+            self._save()
 
     def get_access_report(self) -> dict:
         self._prune_invites()
@@ -176,13 +209,13 @@ class ChatStateStore:
             if chat_id.startswith("_") or not isinstance(data, dict):
                 continue
             access = data.get("access", {})
-            if isinstance(access, dict):
-                for folder, tag in access.items():
-                    report["active"].append({
-                        "chat_id": chat_id,
-                        "folder": folder,
-                        "tag": tag
-                    })
+            for folder, data in access.items():
+                tag = data.get("tag", "invitado") if isinstance(data, dict) else data
+                report["active"].append({
+                    "chat_id": chat_id,
+                    "folder": folder,
+                    "tag": tag
+                })
         return report
 
     def revoke_access(self, target: str) -> bool:
@@ -201,7 +234,12 @@ class ChatStateStore:
                 continue
             access = data.get("access", {})
             if isinstance(access, dict):
-                to_remove = [f for f, t in access.items() if t == target]
+                to_remove = []
+                for f, data in access.items():
+                    tag = data.get("tag") if isinstance(data, dict) else data
+                    if tag == target:
+                        to_remove.append(f)
+                
                 if to_remove:
                     for f in to_remove:
                         access.pop(f)

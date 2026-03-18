@@ -51,7 +51,23 @@ class TelegramAdapter:
         if not self.allowed_chat_ids:
             return True
         chat = update.effective_chat
-        return bool(chat and chat.id in self.allowed_chat_ids)
+        if not chat:
+            return False
+            
+        # 1. Admin ID en .env
+        if chat.id in self.allowed_chat_ids:
+            return True
+            
+        # 2. Tiene acceso activo en el estado
+        if self.state_store.is_user_allowed(str(chat.id)):
+            return True
+            
+        # 3. Intento de unirse (necesita el código después)
+        msg = update.effective_message
+        if msg and msg.text and msg.text.strip().lower().startswith("/join"):
+            return True
+            
+        return False
 
     def _list_named_contexts(self) -> list[str]:
         contexts = set()
@@ -714,8 +730,7 @@ class TelegramAdapter:
         is_admin = self._is_admin(update)
         allowed_folders = set(self.state_store.get_allowed_folders(chat_id))
 
-        # Si el usuario no tiene ninguna carpeta permitida y no es admin,
-        # su única forma de interactuar es usando /join. Si no, lo ignoramos.
+        # Doble check: si no es admin, no tiene folders y no es /join, ignoramos
         msg_text = msg.text or msg.caption or ""
         if not is_admin and not allowed_folders and not msg_text.strip().startswith("/join"):
             return
