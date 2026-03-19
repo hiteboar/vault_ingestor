@@ -10,7 +10,7 @@ class VaultAgent:
     Agente IA Core para gestión y análisis del Vault.
     Independiente de la interfaz de usuario (Telegram, etc).
     """
-    def __init__(self, api_key: str, model_name: str = "gemini-1.5-flash", storage_dir: str = "./vault_storage"):
+    def __init__(self, api_key: str, model_name: str = "gemini-flash-latest", storage_dir: str = "./vault_storage"):
         if not api_key:
             raise ValueError("Se requiere GEMINI_API_KEY para inicializar el agente.")
         
