@@ -1,0 +1,32 @@
+#!/bin/bash
+# setup_pi.sh - Vault Ingestor Setup for Raspberry Pi
+
+echo "=== Vault Ingestor: Setup for Raspberry Pi ==="
+
+# 1. Verificar si existe .venv
+if [ ! -d ".venv" ]; then
+    echo "Creating virtual environment (.venv)..."
+    python -m venv .venv
+else
+    echo "Virtual environment (.venv) already exists."
+fi
+
+# 2. Activar entorno virtual
+echo "Activating virtual environment..."
+source .venv/bin/activate
+
+# 3. Instalar dependencias
+echo "Installing dependencies from requirements.txt..."
+pip install --upgrade pip
+pip install -r requirements.txt
+
+# 4. Verificar instalación
+echo "Running diagnosis..."
+python diagnose_pi.py
+
+echo ""
+echo "=== Setup complete! ==="
+echo "To run the bot, use:"
+echo "  source .venv/bin/activate"
+echo "  python app.py"
+echo ""
