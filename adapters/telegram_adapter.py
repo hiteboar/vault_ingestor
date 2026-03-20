@@ -778,10 +778,11 @@ class TelegramAdapter:
         help_text += "🔧 *Configuración*\n"
         if is_admin:
             help_text += "/original on|off     → Calidad de imagen (ON/OFF)\n"
-            help_text += "/restore_stable      → Recupera última versión estable\n"
+            help_text += "/admin               → Iniciar sesión con el Agente IA\n"
+            help_text += "/restore\_stable      → Recuperar última versión estable\n"
         
         help_text += "/help                → Muestra este menú\n\n"
-        help_text += "_Nota: Si no especificas <carpeta> en los comandos marcados con '?', se usará tu carpeta activa._"
+        help_text += "*Nota:* Si no especificas <carpeta> en los comandos marcados con '?', se usará tu carpeta activa."
         
         await msg.reply_text(help_text, parse_mode="Markdown")
         return True
