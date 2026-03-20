@@ -38,6 +38,7 @@ class TelegramAdapter:
         allowed_chat_ids: Optional[Set[int]] = None,
         max_bytes: Optional[int] = None,
         agent: Optional[VaultAgent] = None,
+        update_manager: Optional[UpdateManager] = None,
     ):
         self.token = token
         self.base_dir = base_dir
@@ -49,6 +50,7 @@ class TelegramAdapter:
         self.allowed_chat_ids = allowed_chat_ids
         self.max_bytes = max_bytes
         self.agent = agent
+        self.update_manager = update_manager
 
     def _is_allowed(self, update: Update) -> bool:
         if not self.allowed_chat_ids:
@@ -561,14 +563,117 @@ class TelegramAdapter:
             await msg.reply_text("🤖 Sesión con el Agente finalizada.")
         else:
             self.state_store.set_pending_action(chat_id, {"action": "admin_session"})
+            
+            # Registrar puente para comandos de la app
+            async def execute_app_command_bridge(command: str) -> str:
+                return await self._execute_agent_command(chat_id, command)
+            
+            self.agent.register_tool("execute_app_command", execute_app_command_bridge)
+            
+            # Registrar herramientas de actualización
+            if self.update_manager:
+                async def stage_file_bridge(relative_path: str, content: str) -> str:
+                    self.update_manager.stage_file(relative_path, content)
+                    return f"Archivo {relative_path} preparado en staging."
+                
+                async def verify_update_bridge() -> str:
+                    ok, msg = self.update_manager.verify_staging()
+                    return f"Verificación: {'OK' if ok else 'ERROR'}\n{msg}"
+                
+                async def apply_update_bridge() -> str:
+                    # Guardamos intención de aplicar, pero requerimos confirmación vía chat normal
+                    # (o el agente puede pedirla y luego llamar a esto)
+                    # Por seguridad, el agente prepara todo y el usuario 'acepta' el cambio definitivo.
+                    self.state_store.set_pending_action(chat_id, {"action": "confirm_apply_update"})
+                    return "⚠️ Actualización preparada. Por favor, confirma en el chat escribiendo 'ACEPTAR ACTUALIZACION' para reiniciar el sistema con el nuevo código."
+
+                self.agent.register_tool("stage_file", stage_file_bridge)
+                self.agent.register_tool("verify_update", verify_update_bridge)
+                self.agent.register_tool("apply_update", apply_update_bridge)
+
             await msg.reply_text(
                 "🤖 *Agente IA Activado*\n"
                 "Ahora puedes enviarme peticiones directas. Puedo analizar archivos, "
                 "darte estadísticas de almacenamiento o realizar operaciones complejas.\n\n"
+                "También puedo ejecutar comandos de Telegram directamente si lo necesito.\n\n"
                 "_Usa /admin de nuevo para salir._",
                 parse_mode="Markdown"
             )
         return True
+
+    async def _execute_agent_command(self, chat_id: str, command_text: str) -> str:
+        """
+        Ejecuta un comando de la aplicación simulando una petición de usuario.
+        Retorna el resultado de la ejecución (o confirmación).
+        """
+        if not command_text.startswith("/"):
+            command_text = "/" + command_text
+        
+        print(f"[agent_bridge] Ejecutando comando: {command_text}")
+        
+        # Mock objects for the command handlers
+        class MockMessage:
+            def __init__(self, cid, bot):
+                self.chat_id = cid
+                self.bot = bot
+                self.replies = []
+            
+            async def reply_text(self, text, parse_mode=None, **kwargs):
+                self.replies.append(text)
+                await self.bot.send_message(chat_id=self.chat_id, text=text, parse_mode=parse_mode, **kwargs)
+                return None
+            
+            async def reply_document(self, document, filename=None, **kwargs):
+                self.replies.append(f"Documento enviado: {filename or document}")
+                await self.bot.send_document(chat_id=self.chat_id, document=document, filename=filename, **kwargs)
+                return None
+                
+            @property
+            def text(self): return command_text
+            
+        class MockUpdate:
+            def __init__(self, msg):
+                self.effective_message = msg
+                self.effective_chat = type('obj', (object,), {'id': int(chat_id), 'type': 'private'})
+                self.effective_user = type('obj', (object,), {'id': int(chat_id), 'full_name': 'Admin (Agent)'})
+
+        from telegram.ext import ContextTypes
+        # We need a proper application context to send messages
+        # Since we are inside the adapter, we might have access to the app's bot
+        # but the run_polling loop is separate. 
+        # For now, let's assume we can use a basic bot instance if we have the token.
+        from telegram import Bot
+        bot = Bot(self.token)
+        
+        mock_msg = MockMessage(chat_id, bot)
+        mock_update = MockUpdate(mock_msg)
+        
+        # Use a dummy context
+        # In a real scenario, we might want to capture the actual context if possible
+        # but for simple command execution, this should suffice.
+        
+        success = await self._handle_command(mock_update, None)
+        
+        if success:
+            return "\n".join(mock_msg.replies) if mock_msg.replies else "Comando ejecutado con éxito."
+        else:
+            return f"Error: Comando '{command_text}' no reconocido o no permitido."
+
+    async def _cmd_restore_stable(self, msg, is_admin: bool) -> bool:
+        if not is_admin:
+            await msg.reply_text("⛔ Solo administradores pueden restaurar versiones stable.")
+            return True
+        if not self.update_manager:
+            await msg.reply_text("❌ Update Manager no disponible.")
+            return True
+            
+        ok, res = self.update_manager.rollback()
+        await msg.reply_text(res)
+        if ok:
+            # Reiniciar
+            self.update_manager.restart()
+        return True
+
 
     async def _cmd_list(self, msg, chat_id: str, args: str, is_admin: bool, allowed_folders: set) -> bool:
         current_ctx = self.state_store.get_context(chat_id, self.default_context)
@@ -673,6 +778,7 @@ class TelegramAdapter:
         help_text += "🔧 *Configuración*\n"
         if is_admin:
             help_text += "/original on|off     → Calidad de imagen (ON/OFF)\n"
+            help_text += "/restore_stable      → Recupera última versión estable\n"
         
         help_text += "/help                → Muestra este menú\n\n"
         help_text += "_Nota: Si no especificas <carpeta> en los comandos marcados con '?', se usará tu carpeta activa._"
@@ -737,6 +843,8 @@ class TelegramAdapter:
             return await self._cmd_preview(msg, chat, chat_id, args, is_admin, allowed_folders, context)
         elif command == "/vaultlist":
             return await self._cmd_vaultlist(msg, is_admin)
+        elif command == "/restore_stable":
+            return await self._cmd_restore_stable(msg, is_admin)
         elif command == "/help":
             return await self._cmd_help(msg, chat_id, is_admin)
 
@@ -821,6 +929,17 @@ class TelegramAdapter:
                     await msg.reply_text("Por favor responde 'si' o 'no' para confirmar la eliminación.")
                     return
             
+            elif pending.get("action") == "confirm_apply_update" and msg.text:
+                if msg.text.strip().upper() == "ACEPTAR ACTUALIZACION":
+                    await msg.reply_text("🚀 Aplicando cambios y reiniciando sistema...")
+                    self.update_manager.apply_update()
+                    self.update_manager.restart()
+                    return
+                elif msg.text.strip().lower() in ("no", "cancelar", "n"):
+                    self.state_store.clear_pending_action(chat_id)
+                    await msg.reply_text("❌ Actualización cancelada.")
+                    return
+
             elif pending.get("action") == "admin_session" and msg.text:
                 if not msg.text.startswith("/"): # Ignorar comandos si estamos en sesión
                     await msg.reply_chat_action("typing")

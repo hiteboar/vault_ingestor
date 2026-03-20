@@ -16,7 +16,7 @@ class VaultAgent:
         
         genai.configure(api_key=api_key)
         
-        # Registrar herramientas
+        # Registrar herramientas base
         self.storage_dir = storage_dir
         self.available_tools = [
             agent_tools.get_disk_usage,
@@ -24,7 +24,8 @@ class VaultAgent:
             agent_tools.file_operation,
             agent_tools.read_project_file,
             agent_tools.write_project_file,
-            agent_tools.run_system_command
+            agent_tools.run_system_command,
+            agent_tools.execute_app_command
         ]
         
         self.model = genai.GenerativeModel(
@@ -32,10 +33,17 @@ class VaultAgent:
             tools=self.available_tools,
             system_instruction=(
                 "Eres el Asistente de Gestión del Vault Ingestor. "
-                "Tu objetivo es ayudar al administrador a gestionar archivos, analizar código y generar reportes. "
+                "Tu objetivo es ayudar al administrador a gestionar archivos, analizar código y ejecutar comandos de sistema. "
                 f"La carpeta base del Vault es: {self.storage_dir}. "
-                "Cualquier operación de archivo debe realizarse respetando esta ruta. "
-                "Sé conciso y profesional. Antes de realizar cambios destructivos (borrar, sobreescribir), "
+                "Cualquier operación de archivo debe realizarse respetando esta ruta.\n\n"
+                "HERRAMIENTAS:\n"
+                "1. Comandos de App: Usa `execute_app_command` para acciones nativas del bot (ej: /invite, /list, /preview, /download). "
+                "Casi siempre es mejor usar el comando nativo si existe.\n"
+                "2. Comandos de Sistema: Usa `run_system_command` para tareas de administración de Linux/OS (ej: df, ls, systemctl, tail).\n"
+                "3. Gestión de archivos: Tienes herramientas para leer/escribir archivos del proyecto.\n\n"
+                "IMPORTANTE: Procura ser proactivo. Si el usuario pide ayuda para gestionar usuarios, usa /access o /invite. "
+                "Si pide espacio, usa df o du. Si detectas problemas, revisa los logs del sistema.\n\n"
+                "Sé conciso y profesional. Antes de realizar cambios destructivos (borrar, sobreescribir código), "
                 "pide siempre confirmación explícita detallando lo que vas a hacer."
             )
         )
@@ -43,24 +51,62 @@ class VaultAgent:
         self.tools: Dict[str, Callable] = {f.__name__: f for f in self.available_tools}
 
     def register_tool(self, name: str, func: Callable):
-        """Registra una función como herramienta para la IA."""
+        """Registra o actualiza una función como herramienta para la IA."""
         self.tools[name] = func
-        logger.info(f"Herramienta registrada: {name}")
+        logger.info(f"Herramienta registrada/actualizada: {name}")
 
     async def chat(self, session_id: str, message: str) -> str:
         """
         Envía un mensaje al agente y devuelve la respuesta.
-        Mantiene el contexto por session_id. Soporta llamadas a funciones automáticas.
+        Mantiene el contexto por session_id. Maneja llamadas a funciones manualmente para soportar herramientas dinámicas.
         """
         if session_id not in self.chat_sessions:
-            # Habilitar el envío automático de respuestas de funciones
-            self.chat_sessions[session_id] = self.model.start_chat(enable_automatic_function_calling=True)
+            # Iniciamos chat sin automatic_function_calling para controlar el bucle nosotros
+            self.chat_sessions[session_id] = self.model.start_chat()
         
         chat = self.chat_sessions[session_id]
         
         try:
-            # Note: start_chat with enable_automatic_function_calling=True handles the loop.
             response = await chat.send_message_async(message)
+            
+            # Bucle de ejecución de funciones (máximo 10 iteraciones por seguridad)
+            for _ in range(10):
+                if not response.candidates[0].content.parts:
+                    break
+                
+                # Buscar si hay llamadas a funciones
+                function_calls = [p.function_call for p in response.candidates[0].content.parts if p.function_call]
+                if not function_calls:
+                    break
+                
+                responses = []
+                for fc in function_calls:
+                    f_name = fc.name
+                    f_args = fc.args
+                    
+                    if f_name in self.tools:
+                        try:
+                            # Ejecutar la función (soportando tanto síncronas como asíncronas)
+                            import inspect
+                            if inspect.iscoroutinefunction(self.tools[f_name]):
+                                result = await self.tools[f_name](**f_args)
+                            else:
+                                result = self.tools[f_name](**f_args)
+                        except Exception as e:
+                            result = f"Error ejecutando {f_name}: {str(e)}"
+                    else:
+                        result = f"Error: Tool {f_name} no encontrada."
+                    
+                    responses.append(genai.protos.Part(
+                        function_response=genai.protos.FunctionResponse(
+                            name=f_name,
+                            response={'result': result}
+                        )
+                    ))
+                
+                # Enviar los resultados de vuelta al modelo
+                response = await chat.send_message_async(responses)
+            
             return response.text
         except Exception as e:
             logger.error(f"Error en comunicación con Gemini: {e}")

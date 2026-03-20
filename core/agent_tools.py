@@ -91,16 +91,14 @@ def write_project_file(path: str, content: str) -> str:
         return f"❌ Error escribiendo archivo: {str(e)}"
 
 def run_system_command(command: str) -> str:
-    """Ejecuta un comando de sistema restringido."""
+    """Ejecuta un comando de sistema. Úsalo para tareas de administración, ver logs, procesos, etc."""
     import subprocess
-    # Lista de comandos permitidos (muy básica por ahora)
-    allowed_base = ["ls", "df", "du", "uptime", "pip list", "git status"]
     
-    is_allowed = any(command.startswith(base) for base in allowed_base)
-    if not is_allowed:
-        # Permitir comandos de procesamiento comunes si son seguros
-        if any(x in command for x in [";", "&", "|", ">", "<"]):
-            return "❌ Error: Caracteres especiales no permitidos por seguridad."
+    # Lista de comandos bloqueados por seguridad crítica
+    blocked_patterns = [">", "rm -rf /", ":(){ :|:& };:", "dd if=", "/dev/"]
+    
+    if any(p in command for p in blocked_patterns):
+        return "❌ Error: El comando contiene patrones bloqueados por seguridad."
             
     try:
         result = subprocess.run(
@@ -108,9 +106,40 @@ def run_system_command(command: str) -> str:
             shell=True, 
             capture_output=True, 
             text=True, 
-            timeout=30
+            timeout=60
         )
         output = result.stdout if result.returncode == 0 else result.stderr
+        if not output and result.returncode == 0:
+            output = "(Comando ejecutado sin salida)"
         return f"--- Output (code {result.returncode}) ---\n{output}"
     except Exception as e:
         return f"❌ Error ejecutando comando: {str(e)}"
+
+def execute_app_command(command: str) -> str:
+    """
+    Ejecuta un comando interno de Telegram (ej: /invite, /list, /folders, /preview).
+    Usa este comando para gestionar el Vault, invitaciones y visualización de archivos.
+    """
+    # Esta función es un placeholder. El adaptador registrará la implementación real.
+    return "Error: Esta herramienta no ha sido enlazada correctamente."
+
+def stage_file(relative_path: str, content: str) -> str:
+    """
+    Prepara un archivo para una actualización de código. 
+    Usa esto para proponer cambios en el código de la aplicación.
+    """
+    return "Error: Esta herramienta no ha sido enlazada correctamente."
+
+def verify_update() -> str:
+    """
+    Verifica que los archivos en staging no tengan errores de sintaxis.
+    Úsalo después de `stage_file` para asegurar la calidad antes de aplicar.
+    """
+    return "Error: Esta herramienta no ha sido enlazada correctamente."
+
+def apply_update() -> str:
+    """
+    Solicita la aplicación definitiva de los cambios de código y el reinicio del sistema.
+    Iniciará un proceso de confirmación con el usuario.
+    """
+    return "Error: Esta herramienta no ha sido enlazada correctamente."

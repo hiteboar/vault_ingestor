@@ -6,6 +6,7 @@ from core.housekeeping import cleanup_part_files
 from core.state import ChatStateStore
 from core.dedup import HashIndex
 from core.agent import VaultAgent
+from core.manager import UpdateManager
 from adapters.telegram_adapter import TelegramAdapter
 
 def parse_allowed_chat_ids(raw: str) -> set[int] | None:
@@ -73,6 +74,9 @@ def main():
     else:
         print("[startup] Agente IA no disponible (falta GEMINI_API_KEY).")
 
+    # Gestor de actualizaciones
+    update_manager = UpdateManager(Path(".").resolve(), storage_dir)
+
     adapter = TelegramAdapter(
         token=token,
         base_dir=storage_dir,
@@ -84,6 +88,7 @@ def main():
         allowed_chat_ids=allowed_chat_ids,
         max_bytes=max_bytes,
         agent=agent,
+        update_manager=update_manager,
     )
     adapter.run()
 
