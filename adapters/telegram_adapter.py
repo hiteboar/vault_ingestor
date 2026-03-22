@@ -266,34 +266,54 @@ class TelegramAdapter:
 
     async def _cmd_download(self, msg, args: str, is_admin: bool, allowed_folders: set) -> bool:
         if not args:
-            await msg.reply_text("Uso: /download <nombre_archivo>")
+            await msg.reply_text("Uso: /download <nombre_archivo_o_ruta>")
             return True
         
-        filename = args
-        await msg.reply_text(f"🔍 Buscando '{filename}'...")
-        
+        target = args.strip()
         found_path = None
+
+        # 1. Intentar como ruta directa (absoluta o relativa)
         try:
-            for p in self.base_dir.rglob(filename):
-                if p.is_file():
-                    # Para no administradores, verificar que el archivo esté en una carpeta permitida
-                    if not is_admin:
-                        # Verificamos si alguna parte de la ruta relativa coincide con allowed_folders
-                        rel = p.relative_to(self.base_dir)
-                        # El primer componente suele ser el nombre de la carpeta (contexto)
-                        if rel.parts[0] in allowed_folders:
-                            found_path = p
-                            break
-                    else:
+            p = Path(target)
+            # Si es absoluta, verificamos que esté dentro de base_dir
+            if p.is_absolute():
+                if p.is_file() and p.resolve().is_relative_to(self.base_dir.resolve()):
+                    found_path = p
+            else:
+                # Si es relativa, probamos desde base_dir
+                p_rel = (self.base_dir / p).resolve()
+                if p_rel.is_file() and p_rel.is_relative_to(self.base_dir.resolve()):
+                    found_path = p_rel
+        except Exception:
+            pass
+
+        # 2. Si no se encontró por ruta directa, usar rglob (búsqueda difusa)
+        if not found_path:
+            await msg.reply_text(f"🔍 Buscando '{target}'...")
+            try:
+                for p in self.base_dir.rglob(target):
+                    if p.is_file():
                         found_path = p
                         break
-        except Exception as e:
-            print(f"[error] Error buscando archivo: {e}")
-        
-        if not found_path:
+            except Exception as e:
+                print(f"[error] Error en rglob de download: {e}")
+
+        if not found_path or not found_path.exists():
             await msg.reply_text("❌ Archivo no encontrado o no tienes acceso.")
             return True
         
+        # 3. Verificación de seguridad/permisos
+        if not is_admin:
+            try:
+                rel = found_path.resolve().relative_to(self.base_dir.resolve())
+                if not rel.parts or rel.parts[0] not in allowed_folders:
+                    await msg.reply_text("⛔ No tienes acceso a este archivo.")
+                    return True
+            except Exception:
+                await msg.reply_text("⛔ Error de permisos verificando el archivo.")
+                return True
+        
+        # 4. Envío del archivo
         try:
             await msg.reply_document(document=found_path, filename=found_path.name)
         except Exception as e:

@@ -1,4 +1,4 @@
-import logging
+ import logging
 from typing import List, Dict, Any, Optional, Callable
 import google.generativeai as genai
 from core import agent_tools
@@ -10,7 +10,7 @@ class VaultAgent:
     Agente IA Core para gestión y análisis del Vault.
     Independiente de la interfaz de usuario (Telegram, etc).
     """
-    def __init__(self, api_key: str, model_name: str = "gemini-flash-latest", storage_dir: str = "./vault_storage"):
+    def __init__(self, api_key: str, model_name: str = "gemini-3.1-flash-lite-preview", storage_dir: str = "./vault_storage"):
         if not api_key:
             raise ValueError("Se requiere GEMINI_API_KEY para inicializar el agente.")
         
