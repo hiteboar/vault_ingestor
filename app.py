@@ -68,9 +68,10 @@ def main():
 
     # Agente IA (Opcional si hay API KEY)
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
-    agent = VaultAgent(gemini_key, storage_dir=str(storage_dir)) if gemini_key else None
+    ai_model = os.getenv("AI_MODEL", "").strip() or None
+    agent = VaultAgent(gemini_key, model_name=ai_model, storage_dir=str(storage_dir)) if gemini_key else None
     if agent:
-        print("[startup] Agente IA configurado y listo.")
+        print(f"[startup] Agente IA configurado ({ai_model or 'default'}).")
     else:
         print("[startup] Agente IA no disponible (falta GEMINI_API_KEY).")
 
