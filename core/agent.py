@@ -5,6 +5,8 @@ from core import agent_tools
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_MODEL = "gemini-1.5-flash-latest"
+
 class VaultAgent:
     """
     Agente IA Core para gestión y análisis del Vault.
@@ -15,8 +17,7 @@ class VaultAgent:
             raise ValueError("Se requiere GEMINI_API_KEY para inicializar el agente.")
         
         # Default model if not provided
-        if not model_name:
-            model_name = "gemini-3.1-flash-lite-preview"
+        self.model_name = model_name or DEFAULT_MODEL
         
         genai.configure(api_key=api_key)
         
@@ -56,12 +57,26 @@ class VaultAgent:
 
     def set_model(self, model_name: str):
         """Actualiza el modelo de Gemini utilizado."""
+        # Copiar instrucciones del modelo actual si existe
+        instr = getattr(self.model, "_system_instruction", None) if hasattr(self, "model") else None
+        
+        self.model_name = model_name
         self.model = genai.GenerativeModel(
             model_name=model_name,
             tools=self.available_tools,
-            system_instruction=self.model._system_instruction # Reutilizar instrucción
+            system_instruction=instr
         )
         logger.info(f"Modelo cambiado a: {model_name}")
+
+    def test_model(self) -> bool:
+        """Realiza una pequeña prueba para verificar si el modelo es accesible."""
+        try:
+            # Una llamada mínima que no gaste muchos tokens
+            self.model.generate_content("ping", generation_config={"max_output_tokens": 1})
+            return True
+        except Exception as e:
+            logger.error(f"Error probando modelo {self.model_name}: {e}")
+            return False
 
     def register_tool(self, name: str, func: Callable):
         """Registra o actualiza una función como herramienta para la IA."""

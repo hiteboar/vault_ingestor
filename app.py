@@ -67,12 +67,27 @@ def main():
     hash_index = HashIndex(storage_dir / "dedup" / "hash_index.json")
 
     # Agente IA (Opcional si hay API KEY)
+    from core.agent import DEFAULT_MODEL
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
-    ai_model = os.getenv("AI_MODEL", "").strip() or "gemini-1.5-flash-latest"
+    ai_model = os.getenv("AI_MODEL", "").strip() or DEFAULT_MODEL
     stored_model = state_store.get_global_setting("agent_model", ai_model)
-    agent = VaultAgent(gemini_key, model_name=stored_model, storage_dir=str(storage_dir)) if gemini_key else None
-    if agent:
-        print(f"[startup] Agente IA configurado ({stored_model}).")
+    
+    agent = None
+    if gemini_key:
+        agent = VaultAgent(gemini_key, model_name=stored_model, storage_dir=str(storage_dir))
+        # Validar el modelo actual
+        if not agent.test_model():
+            print(f"[warning] Modelo '{stored_model}' no disponible. Reintentando con default...")
+            agent.set_model(DEFAULT_MODEL)
+            if agent.test_model():
+                print(f"[startup] Agente IA reconfigurado con default ({DEFAULT_MODEL}).")
+                state_store.set_global_setting("agent_model", DEFAULT_MODEL)
+            else:
+                print("[error] Ni siquiera el modelo default funciona. Desactivando agente.")
+                agent = None
+        
+        if agent:
+            print(f"[startup] Agente IA configurado ({agent.model_name}).")
     else:
         print("[startup] Agente IA no disponible (falta GEMINI_API_KEY).")
 

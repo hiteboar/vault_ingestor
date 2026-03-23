@@ -998,22 +998,37 @@ class TelegramAdapter:
         return False
 
     async def _cmd_agent_model(self, msg, args: str, is_admin: bool) -> bool:
+        from core.agent import DEFAULT_MODEL
         if not is_admin:
             await msg.reply_text("⛔ Solo administradores.")
             return True
         if not args:
-            current = self.state_store.get_global_setting("agent_model", "gemini-1.5-flash-latest")
+            current = self.state_store.get_global_setting("agent_model", DEFAULT_MODEL)
             await msg.reply_text(f"🤖 Modelo actual: `{current}`\nUsa `/agent_model <nombre>` para cambiarlo.", parse_mode="Markdown")
             return True
         
         new_model = args.strip()
+        if not self.agent:
+            await msg.reply_text("❌ El agente no está disponible (falta API KEY).")
+            return True
+
+        # Guardar el anterior por si acaso
+        old_model = self.agent.model_name
+        
         try:
-            self.state_store.set_global_setting("agent_model", new_model)
-            if self.agent:
-                self.agent.set_model(new_model)
-            await msg.reply_text(f"✅ Modelo cambiado a: `{new_model}`", parse_mode="Markdown")
+            await msg.reply_text(f"⏳ Validando modelo `{new_model}`...", parse_mode="Markdown")
+            self.agent.set_model(new_model)
+            if self.agent.test_model():
+                self.state_store.set_global_setting("agent_model", new_model)
+                await msg.reply_text(f"✅ Modelo cambiado a: `{new_model}`", parse_mode="Markdown")
+            else:
+                # Revertir
+                self.agent.set_model(old_model)
+                await msg.reply_text(f"❌ El modelo `{new_model}` no parece ser válido o accesible. Revertido a `{old_model}`.", parse_mode="Markdown")
         except Exception as e:
-            await msg.reply_text(f"❌ Error al cambiar modelo: {e}")
+            if self.agent:
+                self.agent.set_model(old_model)
+            await msg.reply_text(f"❌ Error al cambiar modelo: {e}\nRevertido a `{old_model}`.")
         return True
 
     async def _cmd_status(self, msg, chat_id: str, is_admin: bool) -> bool:
