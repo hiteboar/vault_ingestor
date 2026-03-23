@@ -4,9 +4,8 @@ from typing import Iterator, Optional, Set
 import re
 import random
 
-import requests
-from telegram import Update
-from telegram.ext import Application, MessageHandler, ContextTypes, filters
+from telegram import Update, InputMediaPhoto, InlineKeyboardButton, InlineKeyboardMarkup, Bot
+from telegram.ext import Application, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
 import shutil
 import tempfile
@@ -15,15 +14,14 @@ from pathlib import Path
 from typing import Iterator, Optional, Set, List
 
 import requests
-from telegram import Update, InputMediaPhoto
-from telegram.ext import Application, MessageHandler, ContextTypes, filters
 
 from core.models import IncomingMedia
 from core.pipeline import process_one
 from core.state import ChatStateStore
-from core.storage import sanitize_context, atomic_write, ext_from_content_type
+from core.storage import sanitize_context, atomic_write, ext_from_content_type, CONTENT_TYPE_EXT
 from core.dedup import HashIndex
 from core.agent import VaultAgent
+from core.env_manager import add_allowed_chat_id, remove_allowed_chat_id
 
 class TelegramAdapter:
     def __init__(
@@ -39,6 +37,7 @@ class TelegramAdapter:
         max_bytes: Optional[int] = None,
         agent: Optional[VaultAgent] = None,
         update_manager: Optional[UpdateManager] = None,
+        env_path: Optional[Path] = None,
     ):
         self.token = token
         self.base_dir = base_dir
@@ -47,10 +46,12 @@ class TelegramAdapter:
         self.hash_index = hash_index
         self.default_context = sanitize_context(default_context)
         self.require_original_default = require_original_default
-        self.allowed_chat_ids = allowed_chat_ids
+        self.allowed_chat_ids = allowed_chat_ids or set()
         self.max_bytes = max_bytes
         self.agent = agent
         self.update_manager = update_manager
+        self.env_path = env_path or Path(".env")
+        self.bot = Bot(token)
 
     def _is_allowed(self, update: Update) -> bool:
         if not self.allowed_chat_ids:
@@ -135,17 +136,126 @@ class TelegramAdapter:
         return True
 
     async def _cmd_join(self, msg, chat_id: str, args: str) -> bool:
-        if not args:
-            await msg.reply_text("Uso: /join <código>")
+        code = args.strip()
+        if not code:
+            await msg.reply_text("Uso: /join <codigo_invitacion>")
             return True
-        code = args.split()[0]
-        folder = self.state_store.claim_invite(chat_id, code)
-        if not folder:
-            await msg.reply_text("❌ Código de invitación inválido o ya usado.")
+
+        # Validamos código pero NO lo reclamamos todavía
+        invites = self.state_store._state.get("_invites", {})
+        if code not in invites:
+            await msg.reply_text("❌ Código no válido o caducado.")
             return True
-        self.state_store.set_context(chat_id, folder)
-        await msg.reply_text(f"✅ Has sido invitado a la carpeta '{folder}'. Tu carpeta activa es ahora '{folder}'.")
+
+        info = invites[code]
+        folder = info["folder"] if isinstance(info, dict) else info
+
+        user = msg.from_user
+        username = f"@{user.username}" if user.username else user.full_name
+        
+        # Guardar solicitud pendiente en el estado para poder usarla en CallbackQuery
+        self.state_store.set_pending_action(chat_id, {
+            "action": "wait_approval",
+            "code": code,
+            "folder": folder
+        })
+
+        # Avisar a los admins
+        admin_text = (
+            "🔔 *Solicitud de Acceso*\n\n"
+            f"👤 *Usuario:* {username} (ID: `{chat_id}`)\n"
+            f"📁 *Carpeta:* `{folder}`\n"
+            f"🔑 *Código usado:* `{code}`\n\n"
+            "¿Permitir el acceso a este usuario?"
+        )
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Aceptar", callback_data=f"appr_acc_{chat_id}"),
+                InlineKeyboardButton("❌ Rechazar", callback_data=f"appr_rej_{chat_id}")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        for admin_id in self.allowed_chat_ids:
+            try:
+                await self.bot.send_message(
+                    chat_id=admin_id,
+                    text=admin_text,
+                    parse_mode="Markdown",
+                    reply_markup=reply_markup
+                )
+            except Exception as e:
+                print(f"[error] No se pudo notificar al admin {admin_id}: {e}")
+
+        await msg.reply_text("⏳ Tu solicitud ha sido enviada a los administradores. Te avisaré cuando la revisen.")
         return True
+
+    async def _on_callback_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        if not query or not query.data:
+            return
+        
+        # Verificar que quien pulsa es admin
+        if query.from_user.id not in self.allowed_chat_ids:
+            await query.answer("⛔ No tienes permisos.")
+            return
+
+        data = query.data
+        if not data.startswith("appr_"):
+            return
+
+        # appr_acc_12345 o appr_rej_12345
+        parts = data.split("_")
+        action = parts[1] # acc / rej
+        user_id = parts[2]
+
+        pending = self.state_store.get_pending_action(user_id)
+        if not pending or pending.get("action") != "wait_approval":
+            await query.answer("⚠️ Solicitud caducada o ya procesada.")
+            await query.edit_message_text("Esta solicitud ya no es válida.")
+            return
+
+        code = pending["code"]
+        folder = pending["folder"]
+
+        if action == "acc":
+            # 1. Reclama invitación
+            claimed_folder = self.state_store.claim_invite(user_id, code)
+            
+            # 2. Añadir a .env y memoria
+            add_allowed_chat_id(self.env_path, user_id)
+            self.allowed_chat_ids.add(int(user_id))
+
+            # 3. Limpiar estado
+            self.state_store.clear_pending_action(user_id)
+
+            await query.answer("✅ Usuario aprobado.")
+            await query.edit_message_text(f"✅ Has aprobado el acceso de `{user_id}` a la carpeta `{folder}`.", parse_mode="Markdown")
+            
+            # Notificar al usuario
+            try:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=f"🎉 ¡Acceso aprobado! Ahora puedes usar el bot.\n📁 Carpeta asignada: *{folder}*",
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass
+
+        elif action == "rej":
+            self.state_store.clear_pending_action(user_id)
+            await query.answer("❌ Usuario rechazado.")
+            await query.edit_message_text(f"❌ Has rechazado el acceso de `{user_id}`.", parse_mode="Markdown")
+            
+            # Notificar al usuario
+            try:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text="❌ Tu solicitud de acceso ha sido rechazada por el administrador."
+                )
+            except Exception:
+                pass
 
     async def _cmd_setfolder(self, msg, chat_id: str, args: str, is_admin: bool, allowed_folders: set) -> bool:
         if not args:
@@ -562,8 +672,15 @@ class TelegramAdapter:
         target = args.strip()
         success = self.state_store.revoke_access(target)
         
+        # Si el target es un chat_id, lo quitamos de .env y memoria
+        if target.isdigit():
+            remove_allowed_chat_id(self.env_path, target)
+            tid = int(target)
+            if tid in self.allowed_chat_ids:
+                self.allowed_chat_ids.remove(tid)
+
         if success:
-            await msg.reply_text(f"✅ Acceso revocado para: '{target}'")
+            await msg.reply_text(f"✅ Acceso revocado para: '{target}' (Eliminado del .env si aplica)")
         else:
             await msg.reply_text(f"❌ No se encontró ningún acceso con: '{target}'")
         return True
@@ -799,6 +916,9 @@ class TelegramAdapter:
         if is_admin:
             help_text += "/original on|off     → Calidad de imagen (ON/OFF)\n"
             help_text += "/admin               → Iniciar sesión con el Agente IA\n"
+            help_text += "/agent_model <m>     → Cambiar modelo de Gemini\n"
+            help_text += "/status              → Ver estado del sistema y disco\n"
+            help_text += "/formats <list|add|remove> → Gestionar formatos permitidos\n"
             help_text += "/restore\_stable      → Recuperar última versión estable\n"
         
         help_text += "/help                → Muestra este menú\n\n"
@@ -864,12 +984,115 @@ class TelegramAdapter:
             return await self._cmd_preview(msg, chat, chat_id, args, is_admin, allowed_folders, context)
         elif command == "/vaultlist":
             return await self._cmd_vaultlist(msg, is_admin)
+        elif command == "/agent_model":
+            return await self._cmd_agent_model(msg, args, is_admin)
+        elif command == "/status":
+            return await self._cmd_status(msg, chat_id, is_admin)
+        elif command == "/formats":
+            return await self._cmd_formats(msg, args, is_admin)
         elif command == "/restore_stable":
             return await self._cmd_restore_stable(msg, is_admin)
         elif command == "/help":
             return await self._cmd_help(msg, chat_id, is_admin)
 
         return False
+
+    async def _cmd_agent_model(self, msg, args: str, is_admin: bool) -> bool:
+        if not is_admin:
+            await msg.reply_text("⛔ Solo administradores.")
+            return True
+        if not args:
+            current = self.state_store.get_global_setting("agent_model", "gemini-1.5-flash-latest")
+            await msg.reply_text(f"🤖 Modelo actual: `{current}`\nUsa `/agent_model <nombre>` para cambiarlo.", parse_mode="Markdown")
+            return True
+        
+        new_model = args.strip()
+        try:
+            self.state_store.set_global_setting("agent_model", new_model)
+            if self.agent:
+                self.agent.set_model(new_model)
+            await msg.reply_text(f"✅ Modelo cambiado a: `{new_model}`", parse_mode="Markdown")
+        except Exception as e:
+            await msg.reply_text(f"❌ Error al cambiar modelo: {e}")
+        return True
+
+    async def _cmd_status(self, msg, chat_id: str, is_admin: bool) -> bool:
+        # reportar solo si es admin
+        if not is_admin:
+            await msg.reply_text("⛔ Solo administradores.")
+            return True
+
+        # Carpeta actual del chat
+        ctx = self.state_store.get_context(chat_id, self.default_context)
+        require_orig = self.state_store.get_require_original(chat_id, self.require_original_default)
+        model = self.state_store.get_global_setting("agent_model", "gemini-1.5-flash-latest")
+
+        # Espacio en disco
+        total, used, free = shutil.disk_usage(self.base_dir)
+        pct = (used / total) * 100
+
+        text = (
+            "📊 *Estado del Sistema*\n\n"
+            f"📁 *Carpeta activa:* `{ctx}`\n"
+            f"💎 *Originales:* `{'ON' if require_orig else 'OFF'}`\n"
+            f"🤖 *Modelo IA:* `{model}`\n"
+            f"📂 *Ruta base:* `{self.base_dir}`\n\n"
+            f"💾 *Disco:* {pct:.1f}% ocupado\n"
+            f"└ Total: {total / (1024**3):.1f} GB\n"
+            f"└ Libre: {free / (1024**3):.1f} GB"
+        )
+        await msg.reply_text(text, parse_mode="Markdown")
+        return True
+
+    async def _cmd_formats(self, msg, args: str, is_admin: bool) -> bool:
+        if not is_admin:
+            await msg.reply_text("⛔ Solo administradores.")
+            return True
+        
+        parts = args.split()
+        sub = parts[0].lower() if parts else "list"
+
+        formats = self.state_store.get_global_setting("file_formats", CONTENT_TYPE_EXT.copy())
+
+        if sub == "list":
+            text = "📄 *Formatos Aceptados*\n\n"
+            if not formats:
+                text += "_No hay formatos específicos configurados._"
+            else:
+                for ct, ext in formats.items():
+                    text += f"• `{ct}` → `{ext}`\n"
+            await msg.reply_text(text, parse_mode="Markdown")
+            return True
+
+        if sub == "add":
+            if len(parts) < 3:
+                await msg.reply_text("Uso: `/formats add <mimetype> <ext>`\nEj: `/formats add image/gif .gif`", parse_mode="Markdown")
+                return True
+            mimetype = parts[1].lower()
+            ext = parts[2].lower()
+            if not ext.startswith("."):
+                ext = "." + ext
+            
+            formats[mimetype] = ext
+            self.state_store.set_global_setting("file_formats", formats)
+            await msg.reply_text(f"✅ Formato añadido: `{mimetype}` → `{ext}`", parse_mode="Markdown")
+            return True
+
+        if sub == "remove":
+            if len(parts) < 2:
+                await msg.reply_text("Uso: `/formats remove <mimetype>`", parse_mode="Markdown")
+                return True
+            mimetype = parts[1].lower()
+            if mimetype in formats:
+                del formats[mimetype]
+                self.state_store.set_global_setting("file_formats", formats)
+                await msg.reply_text(f"✅ Formato eliminado: `{mimetype}`", parse_mode="Markdown")
+            else:
+                await msg.reply_text(f"❌ El formato `{mimetype}` no está en la lista.", parse_mode="Markdown")
+            return True
+
+        await msg.reply_text("Comando inválido. Usa `/formats [list|add|remove]`", parse_mode="Markdown")
+        return True
 
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = update.effective_message
@@ -1094,6 +1317,8 @@ class TelegramAdapter:
                 context=ctx,
                 max_bytes=self.max_bytes,
                 hash_index=self.hash_index,
+                formats_dict=self.state_store.get_global_setting("file_formats", None),
+                allowed_prefixes=self.state_store.get_global_setting("allowed_prefixes", None),
             )
 
             rel = path_to_report.relative_to(self.base_dir)

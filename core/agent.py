@@ -54,6 +54,15 @@ class VaultAgent:
         self.chat_sessions: Dict[str, Any] = {}
         self.tools: Dict[str, Callable] = {f.__name__: f for f in self.available_tools}
 
+    def set_model(self, model_name: str):
+        """Actualiza el modelo de Gemini utilizado."""
+        self.model = genai.GenerativeModel(
+            model_name=model_name,
+            tools=self.available_tools,
+            system_instruction=self.model._system_instruction # Reutilizar instrucción
+        )
+        logger.info(f"Modelo cambiado a: {model_name}")
+
     def register_tool(self, name: str, func: Callable):
         """Registra o actualiza una función como herramienta para la IA."""
         self.tools[name] = func

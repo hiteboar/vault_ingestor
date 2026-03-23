@@ -36,7 +36,22 @@ class ChatStateStore:
     def _chat(self, chat_id: str) -> Dict[str, Any]:
         if chat_id not in self._state or not isinstance(self._state.get(chat_id), dict):
             self._state[chat_id] = {}
+        # Ensure access exists
+        if "access" not in self._state[chat_id]:
+           self._state[chat_id]["access"] = {}
         return self._state[chat_id]
+
+    # ---- Global Settings ----
+    def get_global_setting(self, key: str, default: Any) -> Any:
+        if "_global" not in self._state:
+            return default
+        return self._state["_global"].get(key, default)
+
+    def set_global_setting(self, key: str, value: Any) -> None:
+        if "_global" not in self._state:
+            self._state["_global"] = {}
+        self._state["_global"][key] = value
+        self._save()
 
     # ---- Context (carpeta) ----
     def get_context(self, chat_id: str, default: str) -> str:

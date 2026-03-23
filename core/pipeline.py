@@ -1,5 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
+from typing import Optional, Dict, List
 from .models import IncomingMedia
 from .storage import save_media
 from .metadata import append_jsonl
@@ -14,6 +15,8 @@ def process_one(
     context: str = "default",
     max_bytes: int | None = None,
     hash_index: HashIndex | None = None,
+    formats_dict: Optional[Dict[str, str]] = None,
+    allowed_prefixes: Optional[List[str]] = None,
 ) -> tuple[Path, bool, str | None, str | None]:
     """
     Devuelve:
@@ -21,15 +24,19 @@ def process_one(
     - Si es duplicado: el archivo recién descargado se borra y path_to_report apunta al existente.
     """
 
-    if not any(media.content_type.startswith(p) for p in ALLOWED_PREFIXES):
-        raise ValueError(f"Tipo no permitido: {media.content_type}")
+    prefixes = allowed_prefixes if allowed_prefixes is not None else ALLOWED_PREFIXES
+    if not any(media.content_type.startswith(p) for p in prefixes):
+        # Si no está en los prefijos, checkeamos si está en el mapeo explícito
+        valid_formats = formats_dict if formats_dict is not None else {}
+        if media.content_type not in valid_formats:
+            raise ValueError(f"Tipo no permitido: {media.content_type}")
 
     if max_bytes is not None and max_bytes > 0:
         if media.size_bytes is not None and media.size_bytes > max_bytes:
             raise ValueError(f"Archivo demasiado grande: {media.size_bytes} > {max_bytes}")
 
     # Guardamos primero
-    saved_path = save_media(base_dir, media, context=context, fsync=True)
+    saved_path = save_media(base_dir, media, context=context, fsync=True, formats_dict=formats_dict)
 
     is_dup = False
     existing = None

@@ -1,7 +1,7 @@
-from __future__ import annotations
 import os
 import hashlib
 from pathlib import Path
+from typing import Optional, Dict
 from .models import IncomingMedia
 
 CONTENT_TYPE_EXT = {
@@ -12,9 +12,10 @@ CONTENT_TYPE_EXT = {
     "video/quicktime": ".mov",
 }
 
-def ext_from_content_type(ct: str) -> str:
+def ext_from_content_type(ct: str, formats_dict: Optional[Dict[str, str]] = None) -> str:
     ct = (ct or "").split(";")[0].strip().lower()
-    return CONTENT_TYPE_EXT.get(ct, ".bin")
+    mapping = formats_dict if formats_dict is not None else CONTENT_TYPE_EXT
+    return mapping.get(ct, ".bin")
 
 def atomic_write(dest: Path, stream, fsync: bool = True) -> None:
     tmp = dest.with_suffix(dest.suffix + ".part")
@@ -44,7 +45,7 @@ def sanitize_context(name: str) -> str:
     s = "".join(out).strip("_")
     return s or "default"
 
-def build_destination(base_dir: Path, media: IncomingMedia, context: str = "default") -> Path:
+def build_destination(base_dir: Path, media: IncomingMedia, context: str = "default", formats_dict: Optional[Dict[str, str]] = None) -> Path:
     dt = media.received_at
     ctx = sanitize_context(context)
 
@@ -53,7 +54,7 @@ def build_destination(base_dir: Path, media: IncomingMedia, context: str = "defa
     else:
         bucket_path = Path(ctx)
 
-    ext = ext_from_content_type(media.content_type)
+    ext = ext_from_content_type(media.content_type, formats_dict=formats_dict)
 
     # id estable por mensaje/archivo
     seed = f"{media.source}|{media.sender_id}|{media.external_ids}".encode("utf-8", errors="ignore")

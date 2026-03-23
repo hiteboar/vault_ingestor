@@ -68,10 +68,11 @@ def main():
 
     # Agente IA (Opcional si hay API KEY)
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
-    ai_model = os.getenv("AI_MODEL", "").strip() or None
-    agent = VaultAgent(gemini_key, model_name=ai_model, storage_dir=str(storage_dir)) if gemini_key else None
+    ai_model = os.getenv("AI_MODEL", "").strip() or "gemini-1.5-flash-latest"
+    stored_model = state_store.get_global_setting("agent_model", ai_model)
+    agent = VaultAgent(gemini_key, model_name=stored_model, storage_dir=str(storage_dir)) if gemini_key else None
     if agent:
-        print(f"[startup] Agente IA configurado ({ai_model or 'default'}).")
+        print(f"[startup] Agente IA configurado ({stored_model}).")
     else:
         print("[startup] Agente IA no disponible (falta GEMINI_API_KEY).")
 
@@ -90,6 +91,7 @@ def main():
         max_bytes=max_bytes,
         agent=agent,
         update_manager=update_manager,
+        env_path=Path(".env").resolve(),
     )
     adapter.run()
 
