@@ -63,7 +63,7 @@ def build_destination(base_dir: Path, media: IncomingMedia, context: str = "defa
     filename = f"{h}{ext}"
     return base_dir / bucket_path / filename
 
-def save_media(base_dir: Path, media: IncomingMedia, context: str = "default", fsync: bool = True) -> Path:
-    dest = build_destination(base_dir, media, context=context)
+def save_media(base_dir: Path, media: IncomingMedia, context: str = "default", fsync: bool = True, formats_dict: Optional[Dict[str, str]] = None) -> Path:
+    dest = build_destination(base_dir, media, context=context, formats_dict=formats_dict)
     atomic_write(dest, media.stream, fsync=fsync)
     return dest
