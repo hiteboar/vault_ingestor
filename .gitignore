@@ -48,6 +48,8 @@ coverage.xml
 *.cover
 *.py.cover
 .hypothesis/
+vault_webapp/
+test_data/
 .pytest_cache/
 cover/
 
