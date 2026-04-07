@@ -9,6 +9,42 @@ from core.agent import VaultAgent
 from core.manager import UpdateManager
 from adapters.telegram_adapter import TelegramAdapter
 
+def is_storage_ready(path: Path) -> tuple[bool, str]:
+    """
+    Verifica si el directorio de almacenamiento es válido y está montado
+    si se detecta que es una ruta absoluta fuera del home (típico de /mnt o /media).
+    """
+    path_str = str(path.resolve())
+    
+    # 1. Verificar si existe la carpeta básica
+    if not path.exists():
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            return True, "✅ Carpeta creada (no parece un montaje externo)."
+        except Exception as e:
+            return False, f"❌ No se pudo crear la carpeta: {e}"
+
+    # 2. Si es una ruta de montaje típica (/mnt, /media, o discos en Windows como D:\)
+    # verificamos si realmente hay un disco montado.
+    is_external = any(path_str.startswith(p) for p in ["/mnt/", "/media/", "/run/media/"])
+    # En Windows, una ruta absoluta que no sea C: podría considerarse externa
+    if os.name == 'nt' and not path_str.lower().startswith("c:"):
+        is_external = True
+
+    if is_external:
+        # os.path.ismount no siempre es fiable con FUSE/Network drives, 
+        # pero es la mejor opción estándar.
+        if hasattr(os.path, 'ismount') and not os.path.ismount(path_str):
+            # Verificación extra: si la carpeta está totalmente vacía y es un punto de montaje,
+            # es muy probable que el disco no esté montado.
+            try:
+                if not any(path.iterdir()):
+                    return False, f"⚠️ ERROR: La ruta {path_str} parece un disco externo pero NO está montado."
+            except Exception:
+                return False, f"⚠️ ERROR: No se puede acceder a la ruta de montaje {path_str}."
+    
+    return True, "✅ Almacenamiento listo."
+
 def parse_allowed_chat_ids(raw: str) -> set[int] | None:
     raw = (raw or "").strip()
     if not raw:
@@ -54,10 +90,18 @@ def main():
     allow_compressed_default = parse_bool(os.getenv("ALLOW_COMPRESSED_PHOTOS", "true"), True)
     require_original_default = not allow_compressed_default
 
-    storage_dir.mkdir(parents=True, exist_ok=True)
-    cleaned = cleanup_part_files(storage_dir)
-    if cleaned:
-        print(f"[startup] Limpieza: eliminados {cleaned} .part antiguos")
+    # Validación de Almacenamiento y Modo Reducido
+    storage_ok, storage_msg = is_storage_ready(storage_dir)
+    reduced_mode = not storage_ok
+    print(f"[startup] {storage_msg}")
+    if reduced_mode:
+        print("[warning] Iniciando en MODO REDUCIDO. El bot solo informará del error.")
+
+    if not reduced_mode:
+        storage_dir.mkdir(parents=True, exist_ok=True)
+        cleaned = cleanup_part_files(storage_dir)
+        if cleaned:
+            print(f"[startup] Limpieza: eliminados {cleaned} .part antiguos")
 
     # Estado por chat (carpeta + original on/off)
     state_path = storage_dir / "state" / "chat_settings.json"
@@ -107,6 +151,8 @@ def main():
         agent=agent,
         update_manager=update_manager,
         env_path=Path(".env").resolve(),
+        reduced_mode=reduced_mode,
+        reduced_mode_error=storage_msg if reduced_mode else None
     )
     adapter.run()
 

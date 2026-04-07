@@ -36,8 +36,10 @@ class TelegramAdapter:
         allowed_chat_ids: Optional[Set[int]] = None,
         max_bytes: Optional[int] = None,
         agent: Optional[VaultAgent] = None,
-        update_manager: Optional[UpdateManager] = None,
+        update_manager=None,
         env_path: Optional[Path] = None,
+        reduced_mode: bool = False,
+        reduced_mode_error: str = None,
     ):
         self.token = token
         self.base_dir = base_dir
@@ -52,6 +54,8 @@ class TelegramAdapter:
         self.update_manager = update_manager
         self.env_path = env_path or Path(".env")
         self.bot = Bot(token)
+        self.reduced_mode = reduced_mode
+        self.reduced_mode_error = reduced_mode_error
 
     def _is_allowed(self, update: Update) -> bool:
         if not self.allowed_chat_ids:
@@ -1131,6 +1135,17 @@ class TelegramAdapter:
         if not is_admin and not allowed_folders and not msg_text.strip().startswith("/join"):
             return
 
+        if self.reduced_mode:
+            if msg_text.startswith("/status"):
+                await msg.reply_text(f"🔴 *MODO REDUCIDO ACTIVADO*\n\n{self.reduced_mode_error}\n\nEl bot no aceptará archivos hasta que se solucione el problema de almacenamiento.", parse_mode="Markdown")
+                return
+            if not msg_text.startswith("/"):
+                # No procesar archivos ni texto normal
+                return
+            if is_admin:
+                await msg.reply_text(f"⚠️ El bot está en modo reducido debido a un error de almacenamiento:\n`{self.reduced_mode_error}`\nUsar /status para ver detalles.", parse_mode="Markdown")
+            return
+
         handled = await self._handle_command(update, context)
         if handled:
             return
@@ -1358,5 +1373,14 @@ class TelegramAdapter:
     def run(self) -> None:
         app = Application.builder().token(self.token).build()
         app.add_handler(MessageHandler(filters.ALL, self._handle_message))
-        print("[telegram] Bot arrancado (polling). Usa /help para comandos.")
+        print(f"[telegram] Bot arrancado (polling). ReducedMode={self.reduced_mode}")
+        
+        async def send_startup_alerts(application: Application):
+            if self.reduced_mode:
+                alert = f"🚨 *ALERTA DE ARRANQUE*\n\nError: `{self.reduced_mode_error}`"
+                for admin_id in self.allowed_chat_ids:
+                    try: await application.bot.send_message(chat_id=admin_id, text=alert, parse_mode="Markdown")
+                    except: pass
+        
+        app.post_init = send_startup_alerts
         app.run_polling(close_loop=False)
