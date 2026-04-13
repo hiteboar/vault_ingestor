@@ -19,7 +19,11 @@ API_URL = "https://api.github.com/repos/hiteboar/vault_ingestor/commits/main"
 if getattr(sys, 'frozen', False):
     BASE_DIR = Path(sys.executable).parent
 else:
-    BASE_DIR = Path(__file__).resolve().parent
+    # Ahora que estamos en una subcarpeta (version_desktop/), apuntamos al padre
+    BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Asegurar que el núcleo es importable
+sys.path.append(str(BASE_DIR))
 
 PROJECT_DIR = BASE_DIR
 VERSION_FILE = BASE_DIR / ".version"
@@ -180,8 +184,9 @@ def launch_app():
     python_exe = str(venv_dir / ("Scripts" if os.name == "nt" else "bin") / "python")
     
     log("Lanzando Consola de Gestión...")
-    # Lanzar la UI nativa
-    subprocess.run([python_exe, "vault_console_ui.py"])
+    # Lanzar la UI nativa (usando la ruta relativa correcta)
+    ui_script = BASE_DIR / "version_desktop" / "console_ui.py"
+    subprocess.run([python_exe, str(ui_script)])
 
 if __name__ == "__main__":
     try:

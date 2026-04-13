@@ -128,8 +128,6 @@ async def get_config():
     """Returns the current relevant environment variables."""
     return {
         "STORAGE_DIR": os.getenv("STORAGE_DIR", ""),
-        "TELEGRAM_BOT_TOKEN": "SET" if os.getenv("TELEGRAM_BOT_TOKEN") else "NOT_SET",
-        "GEMINI_API_KEY": "SET" if os.getenv("GEMINI_API_KEY") else "NOT_SET",
         "API_PORT": os.getenv("API_PORT", "8000"),
         "ALLOW_COMPRESSED_PHOTOS": os.getenv("ALLOW_COMPRESSED_PHOTOS", "true"),
     }

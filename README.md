@@ -1,81 +1,50 @@
 # Raspi Vault Ingestor - Core 🛡️📦
 
-A lightweight, personal **media ingestor and vault core** designed for home servers, personal computers, or Raspberry Pi devices. This is the **Core Engine** that provides storage logic, deduplication, and a REST API for management.
+A lightweight, personal **media ingestor and vault core** designed for home servers, personal computers, or Raspberry Pi devices. This is the **Base Engine** that provides storage logic, deduplication, and a REST API for management.
 
-> [!NOTE]
-> This branch (`main`) contains only the core engine and API. For the Telegram Bot or AI Agent features, please check their respective branches.
+## 📂 Project Structure
 
-## 🚀 Key Features
+The project is organized by flavors to support different use cases:
 
-- **Automated Organization**: Files are sorted by **Year/Month** by default.
-- **Custom Folders (Contexts)**: Create specific directories for events, trips, or projects.
-- **Deduplication**: Built-in hash-based detection to prevent storing identical files twice.
-- **REST API**: A FastAPI backend to consult metadata and retrieve media files.
-- **Atomic Operations**: Secure file writing to prevent data corruption.
-- **Core Setup Wizard**: A simple interactive tool to configure storage paths and API settings.
+### 1. **Core Engine** (Root)
+The heart of the system. Contains the API (`api/`) and the storage logic (`core/`).
+- `app.py`: Universal starter for the backend API.
+- `.env.example`: Template for manual configuration.
 
----
+### 2. **Version: Raspberry Pi** (`/version_pi`)
+Optimized for home servers and low-power devices.
+- `setup_pi.sh`: Intelligent installer for Linux environments.
+- `diagnose_pi.py`: Hardware and permission diagnostic tool.
 
-## 📋 Requirements
-
-- **Python 3.9+**
-- **Git**
-
----
-
-## 🛠️ Installation
-
-### 1. Clone the repository
-```bash
-git clone https://github.com/your-username/vault-ingestor.git
-cd vault-ingestor
-```
-
-### 2. Run the Core Setup
-The project includes a smart wizard that handles virtual environment creation and configuration:
-```bash
-bash setup_pi.sh
-```
-*Note: This script will install dependencies and guide you through creating your `.env` file.*
+### 3. **Version: Windows Desktop** (`/version_desktop`)
+A user-friendly version with a native dashboard.
+- `launcher.py`: Automatic installer and updater (GitHub integration).
+- `console_ui.py`: Premium management console with system monitoring.
 
 ---
 
-## 🌐 API & Usage
+## 🚀 Getting Started
 
-Start the API service:
+### Standard (API Only)
 ```bash
 python app.py
 ```
-By default, the API will be available at `http://localhost:8000`.
 
-### Endpoints
-- `GET /api/items`: List all ingested files and their metadata.
-- `GET /api/media/{path}`: Access a specific file.
+### Windows Desktop (Auto-setup)
+Run `python version_desktop/launcher.py` to start the automatic installation and dashboard.
 
----
-
-## 📂 Storage Structure
-
-By default, the server organizes files as follows:
-```text
-storage/
- ├── 2026/
- │   ├── 03/
- │   │   └── file.jpg
- ├── trips/           <-- Custom Folder
- │   └── vacation.mp4
- └── _vault/          <-- Isolated Secrets
-     └── passport.pdf
-```
+### Raspberry Pi (CLI)
+Run `bash version_pi/setup_pi.sh` for guided terminal setup.
 
 ---
 
-## ⚙️ Running as a Service (Linux)
-
-To keep the API running in the background, you can use the generated `vault_ingestor.service` file or create one manually with `systemd`.
+## 🌐 API Endpoints
+- `GET /api/items`: List metadata of stored files.
+- `GET /api/system/status`: Real-time storage, CPU, and RAM telemetry.
+- `POST /api/config`: Visual configuration bridge.
 
 ---
 
 ## 📄 License
+MIT License. See `LICENSE` for details.
 
-This project is open-source under the MIT License. See `LICENSE` for details.

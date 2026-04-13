@@ -1,7 +1,12 @@
 import os
 import threading
 import time
+import sys
 from pathlib import Path
+
+# Asegurar que el núcleo es importable desde la subcarpeta
+BASE_DIR = Path(__file__).resolve().parent.parent
+sys.path.append(str(BASE_DIR))
 
 import webview
 import uvicorn
@@ -143,24 +148,12 @@ HTML_CONTENT = """
                 </header>
 
                 <div class="glass rounded-3xl p-8 max-w-3xl">
-                    <p class="text-slate-300 mb-8 font-light text-lg">Configura de forma visual las claves necesarias para que la API, el Bot y el Agente se comuniquen de manera correcta, sin tocar archivos locales.</p>
+                    <p class="text-slate-300 mb-8 font-light text-lg">Configura de forma visual las opciones del motor de almacenamiento central.</p>
                     
                     <form id="config-form" class="space-y-6" onsubmit="event.preventDefault(); saveConfig();">
                         <div class="bg-white/5 p-6 rounded-2xl border border-white/5">
-                            <label class="block text-sm font-semibold mb-2 text-blue-300">Telegram Bot Token</label>
-                            <p class="text-xs text-slate-400 mb-3">Obtén esto hablando con @BotFather en Telegram.</p>
-                            <input type="password" id="input-TELEGRAM_BOT_TOKEN" placeholder="Cargando..." class="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500 transition-colors">
-                        </div>
-                        
-                        <div class="bg-white/5 p-6 rounded-2xl border border-white/5">
-                            <label class="block text-sm font-semibold mb-2 text-purple-300">Gemini API Key</label>
-                            <p class="text-xs text-slate-400 mb-3">Necesario para la IA y el modo Agente avanzado.</p>
-                            <input type="password" id="input-GEMINI_API_KEY" placeholder="Cargando..." class="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-purple-500 transition-colors">
-                        </div>
-                        
-                        <div class="bg-white/5 p-6 rounded-2xl border border-white/5">
-                            <label class="block text-sm font-semibold mb-2 text-cyan-300">Carpeta de Almacenamiento (Storage Dir)</label>
-                            <p class="text-xs text-slate-400 mb-3">Ruta absoluta o relativa donde se guardarán las fotos, audios y metadatos.</p>
+                            <label class="block text-sm font-semibold mb-2 text-cyan-300">Carpeta de Almacenamiento Principal (Storage Dir)</label>
+                            <p class="text-xs text-slate-400 mb-3">Ruta absoluta o relativa donde se guardarán los archivos procesados y sus metadatos.</p>
                             <input type="text" id="input-STORAGE_DIR" placeholder="Ej: vault_storage" class="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-cyan-500 transition-colors">
                         </div>
                         
@@ -198,14 +191,6 @@ HTML_CONTENT = """
                 
                 document.getElementById('input-STORAGE_DIR').value = data.STORAGE_DIR || '';
                 
-                const tt = document.getElementById('input-TELEGRAM_BOT_TOKEN');
-                tt.placeholder = data.TELEGRAM_BOT_TOKEN === 'SET' ? '********** (Token actual oculto)' : 'Pega tu token de Telegram aquí';
-                tt.value = '';
-                
-                const gk = document.getElementById('input-GEMINI_API_KEY');
-                gk.placeholder = data.GEMINI_API_KEY === 'SET' ? '********** (Token actual oculto)' : 'Pega tu API Key de Gemini aquí';
-                gk.value = '';
-                
             } catch (e) {
                 console.error("Error fetching config", e);
             }
@@ -227,8 +212,6 @@ HTML_CONTENT = """
             btn.disabled = true;
             
             try {
-                await updateSingleConfig('TELEGRAM_BOT_TOKEN', document.getElementById('input-TELEGRAM_BOT_TOKEN').value);
-                await updateSingleConfig('GEMINI_API_KEY', document.getElementById('input-GEMINI_API_KEY').value);
                 await updateSingleConfig('STORAGE_DIR', document.getElementById('input-STORAGE_DIR').value);
                 
                 addLog("[Config] Entorno actualizado. Algunos cambios pueden requerir reiniciar la aplicación.");
@@ -280,7 +263,7 @@ HTML_CONTENT = """
                      const data = await response.json();
                      
                      // Si los valores críticos no están configurados, forzar el asistente
-                     if (data.TELEGRAM_BOT_TOKEN === 'NOT_SET' || data.GEMINI_API_KEY === 'NOT_SET') {
+                     if (data.STORAGE_DIR === '') {
                          addLog("[System] Primera ejecución: Iniciando asistente de configuración...");
                          switchView('view-config');
                      } else {
