@@ -62,7 +62,7 @@ db.sqlite3
 db.sqlite3-journal
 
 # Flask stuff:
-instance/
+65: instance/
 .webassets-cache
 
 # Scrapy stuff:
@@ -110,3 +110,5 @@ _tmp/
 state/
 dedup/
 _vault/
+tests/
+.gemini/
