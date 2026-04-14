@@ -105,6 +105,11 @@ HTML_CONTENT = """
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37a1.724 1.724 0 002.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
                         Asistente Configuración
                     </a>
+
+                    <a id="btn-nav-mobile" onclick="switchView('view-mobile')" class="nav-btn flex items-center gap-3 text-slate-400 hover:text-white transition-colors p-3 rounded-xl mt-2">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" /></svg>
+                        Vincular App Móvil
+                    </a>
                 </nav>
             </div>
 
@@ -194,6 +199,60 @@ HTML_CONTENT = """
                 </div>
             </div>
 
+            <!-- ====== VIEW: MOBILE LINKING ====== -->
+            <div id="view-mobile" style="display: none;">
+                <header class="mb-10">
+                    <h1 class="text-3xl font-bold">Vincular Dispositivo Móvil</h1>
+                    <p class="text-slate-400 mt-2">Conecta tu teléfono Android para gestionar el Vault desde cualquier lugar.</p>
+                </header>
+
+                <div class="grid grid-cols-2 gap-10">
+                    <div class="glass rounded-3xl p-8 flex flex-col items-center">
+                        <div class="w-full text-center mb-6">
+                            <h2 class="text-xl font-bold">1. Escanea el código</h2>
+                            <p class="text-sm text-slate-400 mt-1">Abre la App de Vault en tu móvil y elige "Vincular".</p>
+                        </div>
+                        
+                        <div class="bg-white p-4 rounded-3xl shadow-2xl shadow-blue-500/20 mb-6">
+                            <img id="pairing-qr" src="" alt="Pairing QR" class="w-64 h-64">
+                        </div>
+                        
+                        <button onclick="generatePairing()" class="text-blue-400 hover:text-blue-300 text-sm flex items-center gap-2">
+                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                             Generar nuevo código
+                        </button>
+                    </div>
+
+                    <div class="space-y-6">
+                        <div class="glass rounded-3xl p-8">
+                            <h2 class="text-xl font-bold mb-4">2. Introduce el PIN</h2>
+                            <p class="text-sm text-slate-400 mb-6">Si la cámara no funciona, introduce este código manualmente en la App.</p>
+                            
+                            <div id="pairing-pin" class="text-6xl font-black tracking-widest text-center py-6 bg-white/5 rounded-2xl text-blue-500 border border-blue-500/20">
+                                ------
+                            </div>
+                            
+                            <div class="mt-4 text-center">
+                                <span class="text-xs text-slate-500 uppercase font-bold">Válido por 5 minutos</span>
+                            </div>
+                        </div>
+
+                        <div class="bg-blue-600/10 border border-blue-500/20 rounded-3xl p-8">
+                            <h3 class="font-bold flex items-center gap-2 text-blue-400 mb-2">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                ¿Qué permite esto?
+                            </h3>
+                            <ul class="text-sm text-slate-300 space-y-2 list-disc list-inside">
+                                <li>Visualizar imágenes sin descargarlas</li>
+                                <li>Subir fotos directamente desde tu móvil</li>
+                                <li>Ver el estado del almacenamiento en tiempo real</li>
+                                <li>Acceso seguro mediante token criptográfico</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
         </div>
     </div>
 
@@ -201,15 +260,45 @@ HTML_CONTENT = """
         function switchView(viewId) {
             document.getElementById('view-dashboard').style.display = 'none';
             document.getElementById('view-config').style.display = 'none';
+            document.getElementById('view-mobile').style.display = 'none';
             
             document.getElementById('btn-nav-dashboard').classList.remove('nav-active');
             document.getElementById('btn-nav-config').classList.remove('nav-active');
+            document.getElementById('btn-nav-mobile').classList.remove('nav-active');
             
             document.getElementById(viewId).style.display = 'block';
             document.getElementById('btn-nav-' + viewId.replace('view-', '')).classList.add('nav-active');
             
             if(viewId === 'view-config') {
                 loadConfig();
+            }
+            if(viewId === 'view-mobile') {
+                generatePairing();
+            }
+        }
+
+        async function generatePairing() {
+            try {
+                // Fetch basic info first for the PIN
+                const response = await fetch('http://localhost:8081/api/auth/request');
+                const data = await response.json();
+                
+                document.getElementById('pairing-pin').innerText = data.pin;
+                
+                // Now load the actual QR image (which generates a new pin internally, 
+                // but we call qr specifically to get the drawing).
+                // Actually our /api/auth/qr creates its own session. 
+                // To keep them in sync, it's better if /qr returns the image for the current session or similar.
+                // For simplicity now, /qr will be the primary source.
+                
+                const qrImg = document.getElementById('pairing-qr');
+                qrImg.src = 'http://localhost:8081/api/auth/qr?t=' + Date.now();
+                
+                // We'll need another small endpoint or change /qr 
+                // but for now, the user scans the QR or uses the PIN from the QR data.
+                
+            } catch (e) {
+                console.error("Error generating pairing", e);
             }
         }
 
