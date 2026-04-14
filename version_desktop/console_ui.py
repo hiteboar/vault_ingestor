@@ -10,6 +10,8 @@ sys.path.append(str(BASE_DIR))
 
 import webview
 import uvicorn
+import pystray
+from PIL import Image, ImageDraw
 from api.main import app as fastapi_app
 
 # Configuración básica
@@ -31,6 +33,33 @@ class Api:
         if os.name == "nt":
             os.startfile(path)
         return True
+
+def run_tray(window):
+    """Ejecuta el icono en la barra de tareas (System Tray) en segundo plano."""
+    def create_image():
+        # Generar un icono estilizado programáticamente
+        image = Image.new('RGBA', (64, 64), color=(0, 0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        # Fondo oscuro redondeado
+        draw.rounded_rectangle((4, 4, 60, 60), radius=16, fill=(15, 23, 42))
+        # Acento azul
+        draw.ellipse((20, 20, 44, 44), fill=(59, 130, 246))
+        return image
+
+    def on_open(icon, item):
+        window.show()
+
+    def on_exit(icon, item):
+        icon.stop()
+        os._exit(0) # Apaga forzosamente todos los hilos daemon (FastAPI, Webview y Pystray)
+
+    menu = pystray.Menu(
+        pystray.MenuItem('Abrir Dashboard', on_open, default=True),
+        pystray.MenuItem('Detener y Salir', on_exit)
+    )
+    
+    icon = pystray.Icon("Vault Ingestor", create_image(), "Vault Ingestor", menu)
+    icon.run()
 
 # El HTML completo con Tailwind y diseño Premium
 HTML_CONTENT = """
@@ -291,6 +320,20 @@ if __name__ == "__main__":
 
     # 3. Lanzar la ventana de escritorio
     api = Api()
-    webview.create_window(UI_TITLE, html=HTML_CONTENT, width=1280, height=800, js_api=api)
+    win = webview.create_window(UI_TITLE, html=HTML_CONTENT, width=1280, height=800, js_api=api)
+    
+    # Interceptar el cierre: en lugar de destruir, escondemos la ventana (background mode)
+    def on_closing():
+        # Llamar directamente suele ser soportado y evita crashes de subprocesos no gestionados 
+        # con la API de Win32 que corrompan el Main Thread.
+        win.hide()
+        return False
+        
+    win.events.closing += on_closing
+    
+    # 4. Iniciar hilo secundario para el Area de Notificaciones (System Tray)
+    threading.Thread(target=run_tray, args=(win,), daemon=True).start()
+
+    # 5. Iniciar Loop principal de la Interfaz
     webview.start()
 

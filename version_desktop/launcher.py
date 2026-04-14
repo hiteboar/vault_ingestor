@@ -11,6 +11,17 @@ import tkinter as tk
 from tkinter import simpledialog
 
 import requests
+import ctypes
+
+def is_debug_mode():
+    debug_file = BASE_DIR / ".debug"
+    return debug_file.exists() or os.environ.get("DEBUG") == "1"
+
+def hide_console():
+    if os.name == "nt":
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if hwnd:
+            ctypes.windll.user32.ShowWindow(hwnd, 0) # 0 = SW_HIDE
 
 REPO_URL = "https://github.com/hiteboar/vault_ingestor"
 ZIP_URL = f"{REPO_URL}/archive/refs/heads/main.zip"
@@ -186,10 +197,20 @@ def launch_app():
     log("Lanzando Consola de Gestión...")
     # Lanzar la UI nativa (usando la ruta relativa correcta)
     ui_script = BASE_DIR / "version_desktop" / "console_ui.py"
-    subprocess.run([python_exe, str(ui_script)])
+    
+    if os.name == "nt" and not is_debug_mode():
+        # Ejecutar con pythonw para no crear dependencias extra de consola si es necesario,
+        # aunque el launcher mismo ya oculta la suya.
+        python_exe = str(venv_dir / "Scripts" / "pythonw.exe")
+        subprocess.run([python_exe, str(ui_script)], creationflags=subprocess.CREATE_NO_WINDOW)
+    else:
+        subprocess.run([python_exe, str(ui_script)])
 
 if __name__ == "__main__":
     try:
+        if not is_debug_mode():
+            hide_console()
+            
         log("=== Vault Ingestor Installer ===")
         
         # 1. Asegurar archivos base
