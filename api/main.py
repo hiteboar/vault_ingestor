@@ -47,6 +47,25 @@ async def verify_device(x_device_token: Optional[str] = Header(None)):
         raise HTTPException(status_code=401, detail="Unauthorized: Device not linked")
     return x_device_token
 
+cloudflare_tunnel = None
+
+@app.on_event("startup")
+async def startup_event():
+    if os.getenv("ENABLE_REMOTE_ACCESS", "false").lower() == "true":
+        import threading
+        def _start_tunnel():
+            global cloudflare_tunnel
+            try:
+                from pycloudflared import try_cloudflare
+                port = int(os.getenv("API_PORT", "8000"))
+                cloudflare_tunnel = try_cloudflare(port=port)
+                os.environ["PUBLIC_URL"] = cloudflare_tunnel.tunnel
+                print(f"\n[TUNNEL] Acceso remoto activado!\nURL Pública: {cloudflare_tunnel.tunnel}\n")
+            except Exception as e:
+                print(f"\n[TUNNEL_ERROR] {e}\n")
+                
+        threading.Thread(target=_start_tunnel, daemon=True).start()
+
 class PinVerify(BaseModel):
     pin: str
 
@@ -150,6 +169,7 @@ async def get_config():
         "STORAGE_DIR": os.getenv("STORAGE_DIR", ""),
         "API_PORT": os.getenv("API_PORT", "8000"),
         "ALLOW_COMPRESSED_PHOTOS": os.getenv("ALLOW_COMPRESSED_PHOTOS", "true"),
+        "ENABLE_REMOTE_ACCESS": os.getenv("ENABLE_REMOTE_ACCESS", "false"),
     }
 
 @app.post("/api/config")
@@ -171,9 +191,11 @@ async def request_pairing():
     pin = auth.generate_pin()
     ip = get_local_ip()
     port = int(os.getenv("API_PORT", "8000"))
+    public_url = os.getenv("PUBLIC_URL")
+    url = public_url if public_url else f"http://{ip}:{port}"
     return {
         "pin": pin,
-        "url": f"http://{ip}:{port}",
+        "url": url,
         "expires_in": 300
     }
 

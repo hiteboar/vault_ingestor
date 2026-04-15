@@ -10,8 +10,10 @@ import {
   ActivityIndicator,
   SafeAreaView,
   StatusBar,
-  Dimensions
+  Dimensions,
+  Button
 } from 'react-native';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as api from './api';
 
 const { width } = Dimensions.get('window');
@@ -27,6 +29,11 @@ export default function App() {
   const [url, setUrl] = useState('');
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
+  
+  // Scanner state
+  const [permission, requestPermission] = useCameraPermissions();
+  const [showScanner, setShowScanner] = useState(false);
+  const [scanned, setScanned] = useState(false);
 
   // Data state
   const [items, setItems] = useState([]);
@@ -79,7 +86,38 @@ export default function App() {
 
   const handleLogout = async () => {
     await api.clearConnection();
+    setUrl('');
+    setPin('');
     setConnected(false);
+  };
+
+  const handleBarcodeScanned = ({ type, data }) => {
+    setScanned(true);
+    setShowScanner(false);
+    try {
+      const payload = JSON.parse(data);
+      if (payload.url && payload.pin) {
+        setUrl(payload.url);
+        setPin(payload.pin);
+        setError('');
+      } else {
+        setError('QR inválido (Faltan datos).');
+      }
+    } catch (e) {
+      setError('El código QR no es válido para Vault Ingestor.');
+    }
+  };
+
+  const openScanner = async () => {
+    if (!permission?.granted) {
+      const result = await requestPermission();
+      if (!result.granted) {
+         setError('Necesitas otorgar permiso de cámara para escanear.');
+         return;
+      }
+    }
+    setScanned(false);
+    setShowScanner(true);
   };
 
   if (loading && !connected) {
@@ -91,16 +129,45 @@ export default function App() {
   }
 
   if (!connected) {
+    if (showScanner) {
+      return (
+        <SafeAreaView style={styles.container}>
+          <CameraView 
+            style={StyleSheet.absoluteFillObject}
+            facing="back"
+            onBarcodeScanned={scanned ? undefined : handleBarcodeScanned}
+            barcodeScannerSettings={{
+              barcodeTypes: ["qr"],
+            }}
+          />
+          <View style={styles.scannerOverlay}>
+             <View style={styles.scannerBox} />
+             <TouchableOpacity style={styles.buttonCancelScanner} onPress={() => setShowScanner(false)}>
+               <Text style={styles.buttonText}>Cancelar Escaneo</Text>
+             </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      );
+    }
+
     return (
       <SafeAreaView style={styles.container}>
         <StatusBar barStyle="light-content" />
         <View style={styles.content}>
           <Text style={styles.title}>Vincular Vault</Text>
-          <Text style={styles.subtitle}>Introduce los datos que aparecen en el Dashboard de escritorio.</Text>
+          <Text style={styles.subtitle}>Escanea el código QR del Dashboard o introduce los datos manualmente.</Text>
           
+          <TouchableOpacity style={styles.buttonScan} onPress={openScanner}>
+            <Text style={styles.buttonScanText}>📷 Escanear Código QR</Text>
+          </TouchableOpacity>
+
+          <View style={styles.divider}>
+              <Text style={styles.dividerText}>O MANUALMENTE</Text>
+          </View>
+
           <TextInput 
             style={styles.input}
-            placeholder="URL del Servidor (ej. http://192.168.1.10:8000)"
+            placeholder="URL del Servidor (ej. http://192.168...)"
             placeholderTextColor="#64748b"
             value={url}
             onChangeText={setUrl}
@@ -119,7 +186,7 @@ export default function App() {
           
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
-          <TouchableOpacity style={styles.button} onPress={handleLink}>
+          <TouchableOpacity style={[styles.button, (!url || !pin) && styles.buttonDisabled]} onPress={handleLink} disabled={!url || !pin}>
             <Text style={styles.buttonText}>Vincular Dispositivo</Text>
           </TouchableOpacity>
         </View>
@@ -248,6 +315,7 @@ const styles = StyleSheet.create({
     color: '#ef4444',
     marginBottom: 15,
     textAlign: 'center',
+    fontWeight: 'bold',
   },
   header: {
     flexDirection: 'row',
@@ -331,5 +399,61 @@ const styles = StyleSheet.create({
   logoutText: {
     color: '#ef4444',
     fontWeight: '600',
+  },
+  buttonScan: {
+    backgroundColor: '#10b981',
+    borderRadius: 12,
+    padding: 18,
+    alignItems: 'center',
+    marginBottom: 20,
+    shadowColor: '#10b981',
+    shadowOffset: {width: 0, height: 4},
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+  },
+  buttonScanText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  divider: {
+    marginVertical: 20,
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#1e293b',
+  },
+  dividerText: {
+    backgroundColor: '#0f172a',
+    paddingHorizontal: 10,
+    position: 'absolute',
+    top: -10,
+    color: '#475569',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  buttonDisabled: {
+    backgroundColor: '#475569',
+  },
+  scannerOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  scannerBox: {
+    width: 250,
+    height: 250,
+    borderWidth: 2,
+    borderColor: '#3b82f6',
+    backgroundColor: 'transparent',
+    borderRadius: 12,
+  },
+  buttonCancelScanner: {
+    position: 'absolute',
+    bottom: 50,
+    backgroundColor: '#ef4444',
+    padding: 15,
+    borderRadius: 12,
+    paddingHorizontal: 30,
   }
 });

@@ -190,6 +190,14 @@ HTML_CONTENT = """
                             <p class="text-xs text-slate-400 mb-3">Ruta absoluta o relativa donde se guardarán los archivos procesados y sus metadatos.</p>
                             <input type="text" id="input-STORAGE_DIR" placeholder="Ej: vault_storage" class="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-cyan-500 transition-colors">
                         </div>
+
+                        <div class="bg-white/5 p-6 rounded-2xl border border-white/5 mt-4">
+                            <label class="flex items-center gap-3 cursor-pointer">
+                                <input type="checkbox" id="input-ENABLE_REMOTE_ACCESS" class="w-5 h-5 accent-cyan-500 bg-black/40 border border-white/10 rounded-lg">
+                                <span class="text-sm font-semibold text-cyan-300">Permitir Acceso Remoto por Internet</span>
+                            </label>
+                            <p class="text-xs text-slate-400 mt-2">Genera una URL segura y temporal (Cloudflare) para que tu móvil pueda conectarse sin estar en el mismo WiFi. La URL cambiará tras cada reinicio.</p>
+                        </div>
                         
                         <div class="pt-6 flex justify-end">
                             <button type="submit" id="save-btn" class="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded-xl font-semibold transition-colors shadow-lg shadow-blue-500/40">Guardar Cambios</button>
@@ -308,6 +316,7 @@ HTML_CONTENT = """
                 const data = await response.json();
                 
                 document.getElementById('input-STORAGE_DIR').value = data.STORAGE_DIR || '';
+                document.getElementById('input-ENABLE_REMOTE_ACCESS').checked = String(data.ENABLE_REMOTE_ACCESS).toLowerCase() === 'true';
                 
             } catch (e) {
                 console.error("Error fetching config", e);
@@ -331,6 +340,7 @@ HTML_CONTENT = """
             
             try {
                 await updateSingleConfig('STORAGE_DIR', document.getElementById('input-STORAGE_DIR').value);
+                await updateSingleConfig('ENABLE_REMOTE_ACCESS', document.getElementById('input-ENABLE_REMOTE_ACCESS').checked ? 'true' : 'false');
                 
                 addLog("[Config] Entorno actualizado. Algunos cambios pueden requerir reiniciar la aplicación.");
                 
