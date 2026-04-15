@@ -6,12 +6,12 @@ echo "=== Vault Ingestor: Setup for Raspberry Pi ==="
 # 0. Instalar dependencias del sistema (para Pillow/Thumbnails)
 echo "Installing system dependencies..."
 sudo apt-get update
-sudo apt-get install -y libopenjp2-7 libtiff6 libjpeg-dev zlib1g-dev
+sudo apt-get install -y libopenjp2-7 libtiff6 libjpeg-dev zlib1g-dev python3-venv
 
 # 1. Verificar si existe .venv
 if [ ! -d ".venv" ]; then
     echo "Creating virtual environment (.venv)..."
-    python -m venv .venv
+    python3 -m venv .venv
 else
     echo "Virtual environment (.venv) already exists."
 fi
