@@ -33,17 +33,33 @@ def notify_admin(message):
     logging.info(f"[NOTIFY] {message}")
     # TODO: Implement external tool call here if needed
 
+import threading
+
+def stream_to_logger(pipe, level):
+    for line in iter(pipe.readline, b''):
+        try:
+            line_str = line.decode('utf-8', errors='replace').rstrip()
+            if line_str:
+                logging.log(level, line_str)
+        except Exception:
+            pass
+
 def run_app():
     """Starts the stage 2 application."""
     logging.info("Starting Stage 2: Main Application...")
     try:
-        # Use Popen to allow monitoring or signal handling if needed
         proc = subprocess.Popen(
             [str(VENV_PYTHON), str(APP_SCRIPT)],
-            stdout=sys.stdout,
-            stderr=sys.stderr,
-            cwd=str(PROJECT_ROOT)
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=str(PROJECT_ROOT),
+            bufsize=1
         )
+        
+        # Iniciar hilos para capturar y loguear todas las salidas y errores de app.py
+        threading.Thread(target=stream_to_logger, args=(proc.stdout, logging.INFO), daemon=True).start()
+        threading.Thread(target=stream_to_logger, args=(proc.stderr, logging.ERROR), daemon=True).start()
+        
         return proc
     except Exception as e:
         logging.error(f"Failed to start Stage 2: {e}")
