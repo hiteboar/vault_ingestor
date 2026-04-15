@@ -3,7 +3,7 @@
     "name": "Vault Mobile",
     "slug": "vault-mobile",
     "version": "1.0.0",
-    "sdkVersion": "54.0.0",
+    "sdkVersion": "52.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "splash": {
