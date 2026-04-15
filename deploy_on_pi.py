@@ -29,16 +29,24 @@ def deploy():
         # 5. Ejecutar setup de venv y dependencias python
         "cd ~/vault_ingestor && bash version_pi/setup_pi.sh",
         
-        # 6. Limpieza agresiva de procesos viejos
+        # 6. Limpieza agresiva de procesos viejos si los hubiera manualmente
+        f"echo {password} | sudo -S systemctl stop vault_ingestor || true",
         f"echo {password} | sudo -S fuser -k 8000/tcp || true",
+        f"echo {password} | sudo -S fuser -k 8001/tcp || true",
         f"echo {password} | sudo -S killall -9 python || true",
         
-        # 7. Arranque limpio
-        "rm ~/vault_ingestor/vault_app.log || true",
-        "cd ~/vault_ingestor && nohup .venv/bin/python app.py > vault_app.log 2>&1 &",
+        # 7. Crear archivo de servicio Systemd para el arranque automático
+        f"echo -e '[Unit]\\nDescription=Vault Ingestor API\\nAfter=network.target\\n\\n[Service]\\nUser={username}\\nWorkingDirectory=/home/{username}/vault_ingestor\\nExecStart=/home/{username}/vault_ingestor/.venv/bin/python /home/{username}/vault_ingestor/app.py\\nRestart=always\\nRestartSec=10\\nStandardOutput=append:/home/{username}/vault_ingestor/vault_app.log\\nStandardError=append:/home/{username}/vault_ingestor/vault_app.log\\n\\n[Install]\\nWantedBy=multi-user.target' > ~/vault_ingestor.service",
+        f"echo {password} | sudo -S mv ~/vault_ingestor.service /etc/systemd/system/",
+        f"echo {password} | sudo -S systemctl daemon-reload",
+        f"echo {password} | sudo -S systemctl enable vault_ingestor",
         
-        # 8. Verificación
-        "sleep 15 && tail -n 50 ~/vault_ingestor/vault_app.log"
+        # 8. Arranque limpio en background persistente
+        "rm ~/vault_ingestor/vault_app.log || true",
+        f"echo {password} | sudo -S systemctl restart vault_ingestor",
+        
+        # 9. Verificación
+        "sleep 5 && tail -n 15 ~/vault_ingestor/vault_app.log"
     ]
     
     try:
