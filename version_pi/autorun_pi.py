@@ -35,6 +35,32 @@ def notify_admin(message):
 
 import threading
 
+def check_for_updates():
+    logging.info("Checking for updates on MobileApp_prod branch...")
+    try:
+        # Comprobar la conexión descargando metadatos. Retorna código de error si no hay wifi/internet
+        subprocess.run(["git", "fetch", "origin", "MobileApp_prod"], check=True, cwd=str(PROJECT_ROOT), capture_output=True)
+        # Comparamos estado contra el trackeo oficial
+        status = subprocess.check_output(["git", "status", "-uno"], cwd=str(PROJECT_ROOT), text=True)
+        if hasattr(status, "lower") and "your branch is behind" in status.lower():
+             logging.info("Update detected! Local branch is behind origin/MobileApp_prod.")
+             return True
+        return False
+    except Exception as e:
+        logging.warning("Offline or error during update check. Skipping update protocol.")
+        return False
+
+def apply_updates():
+    logging.info("Auto-Updating components from MobileApp_prod...")
+    try:
+        # Sincronizamos forzósamente (git fetch ya lo hizo pero igual) para evitar conflictos de merge visuales
+        subprocess.run(["git", "reset", "--hard", "origin/MobileApp_prod"], check=True, cwd=str(PROJECT_ROOT), capture_output=True)
+        logging.info("Pull complete. Running setup_pi.sh for new dependencies...")
+        subprocess.run(["bash", "version_pi/setup_pi.sh"], check=True, cwd=str(PROJECT_ROOT), capture_output=True)
+        logging.info("Successfully updated Vault Ingestor via Auto-Updater.")
+    except Exception as e:
+        logging.error(f"Critical failure applying update: {e}. Attempting boot anyway.")
+
 def stream_to_logger(pipe, level):
     for line in iter(pipe.readline, b''):
         try:
@@ -67,6 +93,12 @@ def run_app():
 
 def main():
     logging.info("=== Stage 1: Vault Ingestor Supervisor ===")
+    
+    # 0. Boot Phase Auto-Updater
+    if check_for_updates():
+         apply_updates()
+    else:
+         logging.info("No updates required. System is proceeding with boot.")
     
     max_retries = 2
     retry_delay = 10 # seconds

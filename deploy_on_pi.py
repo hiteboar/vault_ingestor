@@ -35,8 +35,8 @@ def deploy():
         f"echo {password} | sudo -S fuser -k 8001/tcp || true",
         f"echo {password} | sudo -S killall -9 python || true",
         
-        # 7. Crear archivo de servicio Systemd para el arranque automático
-        f"echo -e '[Unit]\\nDescription=Vault Ingestor API\\nAfter=network.target\\n\\n[Service]\\nUser={username}\\nWorkingDirectory=/home/{username}/vault_ingestor\\nExecStart=/home/{username}/vault_ingestor/.venv/bin/python /home/{username}/vault_ingestor/app.py\\nRestart=always\\nRestartSec=10\\nStandardOutput=append:/home/{username}/vault_ingestor/vault_app.log\\nStandardError=append:/home/{username}/vault_ingestor/vault_app.log\\n\\n[Install]\\nWantedBy=multi-user.target' > ~/vault_ingestor.service",
+        # 7. Crear archivo de servicio Systemd para el arranque automático delegando en el Supervisor
+        f"echo -e '[Unit]\\nDescription=Vault Ingestor API\\nAfter=network.target\\n\\n[Service]\\nUser={username}\\nWorkingDirectory=/home/{username}/vault_ingestor\\nExecStart=/home/{username}/vault_ingestor/.venv/bin/python /home/{username}/vault_ingestor/version_pi/autorun_pi.py\\nRestart=always\\nRestartSec=10\\nStandardOutput=append:/home/{username}/vault_ingestor/vault_app.log\\nStandardError=append:/home/{username}/vault_ingestor/vault_app.log\\n\\n[Install]\\nWantedBy=multi-user.target' > ~/vault_ingestor.service",
         f"echo {password} | sudo -S mv ~/vault_ingestor.service /etc/systemd/system/",
         f"echo {password} | sudo -S systemctl daemon-reload",
         f"echo {password} | sudo -S systemctl enable vault_ingestor",
