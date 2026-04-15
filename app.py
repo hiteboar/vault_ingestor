@@ -8,7 +8,7 @@ def main():
 
     # Cargar configuración básica
     host = os.getenv("API_HOST", "0.0.0.0")
-    port = int(os.getenv("API_PORT", "8000"))
+    port = int(os.getenv("API_PORT", "8001"))
     storage_dir = Path(os.getenv("STORAGE_DIR", "./vault_storage")).resolve()
 
     print("==========================================")
@@ -22,7 +22,7 @@ def main():
 
     # Iniciar el servidor FastAPI
     # El servidor se encuentra en api/main.py bajo el nombre 'app'
-    uvicorn.run("api.main:app", host=host, port=port, reload=True)
+    uvicorn.run("api.main:app", host=host, port=port, reload=False)
 
 if __name__ == "__main__":
     main()
