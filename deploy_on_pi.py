@@ -3,10 +3,14 @@ import os
 import sys
 import time
 
+import getpass
+
 def deploy():
-    hostname = "192.168.1.148"
-    username = "hiteboar"
-    password = "barcallampo13"
+    hostname = os.getenv("PI_HOSTNAME", "192.168.1.148")
+    username = os.getenv("PI_USERNAME", "hiteboar")
+    password = os.getenv("PI_PASSWORD")
+    if not password:
+        password = getpass.getpass(f"Ingresa la contraseña SSH para {username}@{hostname}: ")
     
     # Comandos a ejecutar en orden
     commands = [
