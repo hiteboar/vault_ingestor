@@ -3,7 +3,7 @@
 
 echo "=== Vault Ingestor: Reparación de Sistema (Raspberry Pi) ==="
 
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+PROJECT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$PROJECT_DIR" || exit
 
 echo "[1/4] Instalando dependencias base del sistema..."

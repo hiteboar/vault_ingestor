@@ -6,7 +6,7 @@ echo "=== Vault Ingestor: Arranque Manual de Emergencia ==="
 echo "En un arranque normal, systemctl enciende automáticamente el servicio."
 
 # Determinar el directorio base
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+PROJECT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 export STORAGE_DIR="$PROJECT_DIR/vault_storage"
 
 cd "$PROJECT_DIR" || exit
