@@ -15,7 +15,10 @@ if [ ! -d ".venv" ]; then
     echo "Creando .venv..."
     python3 -m venv .venv
 fi
-source .venv/bin/activate
+. .venv/bin/activate
+
+# Compatibilidad de compilacion para módulo Cryptography en Python 3.13 (Raspberry OS Trixie)
+export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
 
 echo "Actualizando librerías..."
 pip install --upgrade pip
