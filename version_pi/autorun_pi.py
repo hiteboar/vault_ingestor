@@ -13,7 +13,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
-        RotatingFileHandler("autorun.log", maxBytes=5*1024*1024, backupCount=3),
+        RotatingFileHandler("app.log", maxBytes=5*1024*1024, backupCount=3),
         logging.StreamHandler(sys.stdout)
     ]
 )
