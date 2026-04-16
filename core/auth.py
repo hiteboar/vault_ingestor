@@ -32,14 +32,19 @@ class AuthManager:
     def _save(self, path: Path, data: Dict):
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
-    def generate_pin(self) -> str:
-        """Generates a random 6-digit PIN valid for 5 minutes."""
+    def generate_pin(self, role: str = "admin", allowed_folders: List[str] = None) -> str:
+        """Generates a random 6-digit PIN valid for 5 minutes with specific scopes."""
+        if allowed_folders is None:
+            allowed_folders = ["*"]
+            
         pin = ''.join(secrets.choice(string.digits) for _ in range(6))
         token = secrets.token_hex(32)
         expires_at = time.time() + 300 # 5 minutes
         
         self.pending_pins[pin] = {
             "token": token,
+            "role": role,
+            "allowed_folders": allowed_folders,
             "expires_at": expires_at
         }
         return pin
@@ -55,6 +60,8 @@ class AuthManager:
             
         token = session["token"]
         self.linked_devices[token] = {
+            "role": session.get("role", "admin"),
+            "allowed_folders": session.get("allowed_folders", ["*"]),
             "linked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "last_seen": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         }
@@ -69,6 +76,16 @@ class AuthManager:
             self._save(self.state_file, self.linked_devices)
             return True
         return False
+
+    def get_device_info(self, token: str) -> Optional[Dict]:
+        """Returns the complete device session if token is valid."""
+        if self.is_token_valid(token):
+            return self.linked_devices[token]
+        return None
+
+    def get_admins_count(self) -> int:
+        """Counts how many admins exist."""
+        return sum(1 for d in self.linked_devices.values() if d.get("role") == "admin")
 
     def revoke_token(self, token: str):
         if token in self.linked_devices:

@@ -74,7 +74,14 @@ class ConfigUpdate(BaseModel):
     value: str
 
 @app.get("/api/items")
-async def get_items():
+async def get_items(x_device_token: str = Header(...)):
+    device = auth.get_device_info(x_device_token)
+    if not device:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    role = device.get("role", "standard")
+    allowed_folders = device.get("allowed_folders", [])
+
     if not META_LOG.exists():
         return []
     
@@ -85,8 +92,18 @@ async def get_items():
                 if line.strip():
                     try:
                         item = json.loads(line)
-                        # Convert absolute saved_path to a relative path from BASE_DIR
                         saved_path = Path(item["saved_path"])
+                        
+                        # Verify access for standard users
+                        if role != "admin":
+                            try:
+                                rel_to_storage = saved_path.relative_to(STORAGE_DIR)
+                                folder_name = rel_to_storage.parts[0] if len(rel_to_storage.parts) > 1 else "root"
+                            except ValueError:
+                                folder_name = "root"
+                            if folder_name not in allowed_folders and "*" not in allowed_folders:
+                                continue
+
                         try:
                             rel = saved_path.relative_to(BASE_DIR)
                             item["web_path"] = str(rel).replace("\\", "/")
@@ -187,8 +204,11 @@ async def update_config(update: ConfigUpdate):
 
 @app.get("/api/auth/request")
 async def request_pairing():
-    """Generates a PIN for the mobile app to link."""
-    pin = auth.generate_pin()
+    """Generates a Master PIN for the mobile app to link. Only allowed if no admin exists."""
+    if auth.get_admins_count() > 0:
+        raise HTTPException(status_code=403, detail="Admin already registered. Use App to invite.")
+        
+    pin = auth.generate_pin(role="admin", allowed_folders=["*"])
     ip = get_local_ip()
     port = int(os.getenv("API_PORT", "8000"))
     public_url = os.getenv("PUBLIC_URL")
@@ -197,6 +217,28 @@ async def request_pairing():
         "pin": pin,
         "url": url,
         "expires_in": 300
+    }
+
+class InviteRequest(BaseModel):
+    folder: str
+
+@app.post("/api/auth/invite")
+async def create_invite(data: InviteRequest, x_device_token: str = Header(...)):
+    """Creates a P2P invite for a standard user to a specific folder (Admin only)."""
+    device = auth.get_device_info(x_device_token)
+    if not device or device.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can generate invites")
+    
+    pin = auth.generate_pin(role="standard", allowed_folders=[data.folder])
+    ip = get_local_ip()
+    port = int(os.getenv("API_PORT", "8000"))
+    public_url = os.getenv("PUBLIC_URL")
+    url = public_url if public_url else f"http://{ip}:{port}"
+    return {
+        "pin": pin,
+        "url": url,
+        "expires_in": 300,
+        "folder": data.folder
     }
 
 @app.post("/api/auth/verify")
@@ -266,11 +308,18 @@ async def get_thumbnail(item_id: str):
 async def upload_file(
     file: UploadFile = File(...), 
     context: str = Body("mobile_upload"),
-    x_device_token: str = Header(..., alias="X-Device-Token")
+    x_device_token: str = Header(...)
 ):
     """Securely uploads a file from the mobile app."""
-    if not auth.is_token_valid(x_device_token):
+    device = auth.get_device_info(x_device_token)
+    if not device:
         raise HTTPException(status_code=401, detail="Invalid token")
+        
+    role = device.get("role", "standard")
+    allowed_folders = device.get("allowed_folders", [])
+    
+    if role != "admin" and context not in allowed_folders and "*" not in allowed_folders:
+        raise HTTPException(status_code=403, detail="No permission to upload to this folder")
         
     try:
         import secrets
