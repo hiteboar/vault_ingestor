@@ -7,20 +7,23 @@ from logging.handlers import RotatingFileHandler
 import traceback
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+LOG_FILE = PROJECT_ROOT / "app.log"
+
 # Setup basic logging with rotation
 # maxBytes=5MB, backupCount=3 -> Max total size ~20MB
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
-        RotatingFileHandler("app.log", maxBytes=5*1024*1024, backupCount=3),
+        RotatingFileHandler(str(LOG_FILE), maxBytes=5*1024*1024, backupCount=3),
         logging.StreamHandler(sys.stdout)
     ]
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
 APP_SCRIPT = PROJECT_ROOT / "app.py"
 VENV_PYTHON = PROJECT_ROOT / ".venv" / "bin" / "python"
+
 
 if not VENV_PYTHON.exists():
     VENV_PYTHON = Path(sys.executable) # Fallback
