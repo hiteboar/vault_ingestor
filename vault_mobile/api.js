@@ -32,6 +32,20 @@ const getClient = async () => {
     });
 };
 
+export const getMe = async () => {
+    const client = await getClient();
+    if (!client) throw new Error('Not connected');
+    const resp = await client.get('/api/auth/me');
+    return resp.data;
+};
+
+export const createInvite = async (folder) => {
+    const client = await getClient();
+    if (!client) throw new Error('Not connected');
+    const resp = await client.post('/api/auth/invite', { folder });
+    return resp.data;
+};
+
 export const fetchStatus = async () => {
     const client = await getClient();
     if (!client) throw new Error('Not connected');
@@ -47,17 +61,44 @@ export const fetchItems = async () => {
 };
 
 export const getMediaUrl = async (item) => {
-    const { url } = await getConnection();
-    return `${url}/api/media/${item.web_path}`;
+    const { url, token } = await getConnection();
+    return { uri: `${url}/api/media/${item.web_path}`, headers: { 'X-Device-Token': token } };
 };
 
 export const getThumbUrl = async (item) => {
-    const { url } = await getConnection();
-    return `${url}/api/media/thumbnail/${item.id}`;
+    const { url, token } = await getConnection();
+    return { uri: `${url}/api/media/thumbnail/${item.id}`, headers: { 'X-Device-Token': token } };
+};
+
+export const uploadFile = async (uri, name, mimeType, folder) => {
+    const { url, token } = await getConnection();
+    if (!url) throw new Error('Not connected');
+
+    const formData = new FormData();
+    formData.append('file', {
+        uri,
+        name,
+        type: mimeType
+    });
+    formData.append('mobile_upload', folder);
+
+    const resp = await fetch(`${url}/api/upload`, {
+        method: 'POST',
+        headers: {
+            'X-Device-Token': token,
+            'Content-Type': 'multipart/form-data',
+        },
+        body: formData,
+    });
+
+    if (!resp.ok) {
+        const txt = await resp.text();
+        throw new Error(txt || 'Upload error');
+    }
+    return await resp.json();
 };
 
 export const verifyPin = async (baseUrl, pin) => {
-    // Normalizing URL
     const url = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
     const resp = await axios.post(`${url}/api/auth/verify`, { pin });
     return resp.data.token;

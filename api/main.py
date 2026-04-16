@@ -249,6 +249,17 @@ async def verify_pairing(data: PinVerify):
         raise HTTPException(status_code=400, detail="Invalid or expired PIN")
     return {"token": token}
 
+@app.get("/api/auth/me")
+async def get_me(x_device_token: str = Header(...)):
+    """Returns the current user role and allowed folders."""
+    device = auth.get_device_info(x_device_token)
+    if not device:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return {
+        "role": device.get("role", "standard"),
+        "allowed_folders": device.get("allowed_folders", [])
+    }
+
 @app.get("/api/auth/qr")
 async def get_pairing_qr():
     """Returns a QR code image for mobile pairing."""
