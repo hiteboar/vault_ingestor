@@ -104,6 +104,11 @@ async def get_items(x_device_token: str = Header(...)):
                             if folder_name not in allowed_folders and "*" not in allowed_folders:
                                 continue
 
+                        # Ensure unique ID and basic structure
+                        if "id" not in item:
+                            import hashlib
+                            item["id"] = hashlib.md5(item.get("saved_path", "unknown").encode()).hexdigest()
+
                         try:
                             rel = saved_path.relative_to(BASE_DIR)
                             item["web_path"] = str(rel).replace("\\", "/")

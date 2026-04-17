@@ -24,6 +24,16 @@ const { width } = Dimensions.get('window');
 const COLUMN_COUNT = 3;
 const ITEM_WIDTH = width / COLUMN_COUNT - 10;
 
+// Utility to format sizes
+const formatBytes = (bytes, decimals = 2) => {
+  if (!bytes || bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const dm = decimals < 0 ? 0 : decimals;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+};
+
 export default function App() {
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -80,7 +90,13 @@ export default function App() {
         api.fetchStatus()
       ]);
       
-      setItems(itemsList);
+      // Deduplicate items by ID (keep latest)
+      const uniqueMap = new Map();
+      itemsList.forEach(item => {
+        uniqueMap.set(item.id, item);
+      });
+      
+      setItems(Array.from(uniqueMap.values()));
       setStatus(sysStatus);
       setError('');
     } catch (e) {
@@ -273,12 +289,37 @@ export default function App() {
       <View style={styles.header}>
         <View>
             <Text style={styles.headerTitle}>Vault ({role === 'admin' ? 'Admin' : 'Estándar'})</Text>
-            <Text style={styles.headerSub}>Carpeta: {currentFolder}</Text>
+            <Text style={styles.headerSub}>IP: {url.replace('http://', '').split(':')[0]}</Text>
         </View>
         <TouchableOpacity onPress={loadData} disabled={loading}>
            {loading ? <ActivityIndicator color="#3b82f6"/> : <Text style={styles.headerAction}>Actualizar</Text>}
         </TouchableOpacity>
       </View>
+
+      {/* Folder Selector */}
+      {view === 'gallery' && (
+        <View style={styles.folderSelector}>
+            <FlatList 
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                data={['root', ...new Set(items.map(i => {
+                    const parts = i.web_path ? i.web_path.split('/') : [];
+                    return parts.length > 1 ? parts[0] : 'root';
+                }).filter(f => f !== 'root'))]}
+                keyExtractor={(f) => f}
+                renderItem={({ item: f }) => (
+                    <TouchableOpacity 
+                        style={[styles.folderChip, currentFolder === f && styles.folderChipActive]}
+                        onPress={() => setCurrentFolder(f)}
+                    >
+                        <Text style={[styles.folderChipText, currentFolder === f && styles.folderChipTextActive]}>
+                            {f === 'root' ? '🏠 Inicio' : `📁 ${f}`}
+                        </Text>
+                    </TouchableOpacity>
+                )}
+            />
+        </View>
+      )}
 
       {/* Tabs */}
       <View style={styles.tabs}>
@@ -340,8 +381,11 @@ export default function App() {
       ) : (
         <View style={styles.statsContainer}>
           <View style={styles.statCard}>
-             <Text style={styles.statLabel}>Disco (Espacio)</Text>
-             <Text style={styles.statValue}>{Math.round(status?.disk?.percent || 0)}%</Text>
+             <Text style={styles.statLabel}>Espacio Libre en Disco</Text>
+             <Text style={styles.statValue}>{Math.round(100 - (status?.disk?.percent || 0))}%</Text>
+             <Text style={styles.statSub}>
+                {formatBytes(status?.disk?.used || 0)} / {formatBytes(status?.disk?.total || 1)} ocupados
+             </Text>
           </View>
           <View style={styles.statCard}>
              <Text style={styles.statLabel}>Memoria RAM</Text>
@@ -421,8 +465,13 @@ const styles = StyleSheet.create({
   errorText: { color: '#ef4444', marginBottom: 15, textAlign: 'center', fontWeight: 'bold' },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: '#1e293b' },
   headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#fff' },
-  headerSub: { fontSize: 12, color: '#10b981', marginTop: 2 },
+  headerSub: { fontSize: 12, color: '#64748b', marginTop: 2 },
   headerAction: { color: '#3b82f6', fontWeight: 'bold' },
+  folderSelector: { paddingVertical: 10, paddingHorizontal: 15, borderBottomWidth: 1, borderBottomColor: '#1e293b' },
+  folderChip: { paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20, backgroundColor: '#1e293b', marginRight: 10, borderWidth: 1, borderColor: '#334155' },
+  folderChipActive: { backgroundColor: '#3b82f6', borderColor: '#3b82f6' },
+  folderChipText: { color: '#94a3b8', fontSize: 13, fontWeight: '600' },
+  folderChipTextActive: { color: '#fff' },
   tabs: { flexDirection: 'row', padding: 10 },
   tab: { flex: 1, padding: 10, alignItems: 'center', borderRadius: 8 },
   tabActive: { backgroundColor: '#1e293b' },
@@ -435,6 +484,7 @@ const styles = StyleSheet.create({
   statCard: { backgroundColor: '#1e293b', padding: 20, borderRadius: 16, borderWidth: 1, borderColor: '#334155' },
   statLabel: { color: '#94a3b8', fontSize: 14, textTransform: 'uppercase', fontWeight: 'bold', marginBottom: 5 },
   statValue: { color: '#fff', fontSize: 32, fontWeight: 'bold' },
+  statSub: { color: '#64748b', fontSize: 12, marginTop: 5 },
   logoutButton: { marginTop: 40, padding: 20, alignItems: 'center', borderWidth: 1, borderColor: '#ef4444', borderRadius: 12 },
   logoutText: { color: '#ef4444', fontWeight: 'bold' },
   divider: { marginVertical: 20, alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#1e293b' },
