@@ -5,6 +5,8 @@ import subprocess
 from pathlib import Path
 from PIL import Image
 import hashlib
+import time
+from datetime import datetime
 from dotenv import load_dotenv
 
 # Cargar configuración
@@ -12,6 +14,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
 STORAGE_DIR = Path(os.getenv("STORAGE_DIR", str(BASE_DIR / "vault_storage"))).resolve()
+UPLOAD_DIR = STORAGE_DIR / "uploaded_files"
 META_LOG = STORAGE_DIR / "metadata.jsonl"
 CACHE_DIR = STORAGE_DIR / ".cache" / "thumbnails"
 TRASH_DIR = STORAGE_DIR / ".trash"
@@ -19,8 +22,10 @@ TRASH_DIR = STORAGE_DIR / ".trash"
 def ensure_dirs():
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     TRASH_DIR.mkdir(parents=True, exist_ok=True)
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 def generate_thumb(item):
+    """Genera miniatura para un item si no existe."""
     item_id = item.get("id")
     orig_path = Path(item.get("saved_path", ""))
     
@@ -54,7 +59,8 @@ def generate_thumb(item):
     return False
 
 def run_thumbnails():
-    print(f"🚀 Generando miniaturas faltantes...")
+    """Analiza registros en metadatos y genera miniaturas faltantes."""
+    print(f"🚀 Generando miniaturas desde metadatos...")
     count = 0
     generated = 0
     if not META_LOG.exists(): return
@@ -70,87 +76,131 @@ def run_thumbnails():
                 count += 1
     print(f"✅ Finalizado: {generated} nuevas miniaturas.")
 
-def run_cleanup(dry_run=True):
-    print(f"🧹 Iniciando limpieza de huérfanos ({'DRY RUN' if dry_run else 'EJECUCIÓN REAL'})...")
+def run_full_scan():
+    """Escanea el disco físicamente, registra archivos nuevos y genera miniaturas."""
+    print(f"🔍 Iniciando escaneo completo del sistema de archivos...")
+    ensure_dirs()
     
-    if not META_LOG.exists():
-        print("❌ No hay log de metadatos.")
-        return
+    # 1. Cargar IDs ya registrados
+    registered_ids = set()
+    if META_LOG.exists():
+        with open(META_LOG, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    item = json.loads(line)
+                    if "id" in item: registered_ids.add(item["id"])
 
-    # 1. Cargar metadatos y verificar archivos faltantes
+    new_items = []
+    found_count = 0
+    
+    # 2. Recorrer UPLOAD_DIR
+    for p in UPLOAD_DIR.rglob("*"):
+        if p.is_file() and not p.name.startswith("."):
+            # Ignorar carpetas de sistema si estuvieran dentro por error
+            if ".cache" in p.parts or ".trash" in p.parts or ".vault" in p.parts:
+                continue
+                
+            found_count += 1
+            item_id = hashlib.md5(str(p.resolve()).encode()).hexdigest()
+            
+            if item_id not in registered_ids:
+                # Determinar contexto (Carpeta)
+                try:
+                    rel = p.relative_to(UPLOAD_DIR)
+                    parts = rel.parts
+                    
+                    # Estructura YYYY/MM/...
+                    if len(parts) >= 3 and parts[0].isdigit() and len(parts[0]) == 4:
+                        context = "root"
+                    elif len(parts) >= 2:
+                        context = parts[0]
+                    else:
+                        context = "root"
+                except Exception:
+                    context = "root"
+
+                item = {
+                    "id": item_id,
+                    "name": p.name,
+                    "saved_path": str(p.resolve()),
+                    "timestamp": datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "source": "manual_scan",
+                    "context": context
+                }
+                new_items.append(item)
+                registered_ids.add(item_id)
+                print(f"  [NUEVO] Registrado: {p.name} en carpeta '{context}'")
+
+    # 3. Guardar nuevos archivos en el log
+    if new_items:
+        with open(META_LOG, "a", encoding="utf-8") as f:
+            for item in new_items:
+                f.write(json.dumps(item) + "\n")
+        print(f"✨ Se han añadido {len(new_items)} archivos nuevos a la app.")
+
+    # 4. Generar miniaturas para TODO lo que falte
+    print(f"🖼️ Verificando miniaturas para {found_count} archivos...")
+    generated = 0
+    if META_LOG.exists():
+        with open(META_LOG, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    if generate_thumb(json.loads(line)):
+                        generated += 1
+    print(f"✅ Proceso finalizado. Total analizado: {found_count}. Miniaturas creadas: {generated}.")
+
+def run_cleanup(dry_run=True):
+    """Limpia registros muertos y archivos no registrados."""
+    print(f"🧹 Limpieza de huérfanos ({'DRY RUN' if dry_run else 'REAL'})...")
+    ensure_dirs()
+    if not META_LOG.exists(): return
+
+    # 1. Verificar registros
     active_items = []
     missing_files = 0
     with open(META_LOG, "r", encoding="utf-8") as f:
         for line in f:
             if line.strip():
                 item = json.loads(line)
-                p = Path(item["saved_path"])
-                if p.exists():
+                if Path(item["saved_path"]).exists():
                     active_items.append(item)
                 else:
                     missing_files += 1
-                    print(f"  [LOG] Archivo no encontrado en disco: {p.name}")
+                    print(f"  [LOG] Registro sin archivo: {item['name']}")
 
     if not dry_run and missing_files > 0:
-        # Reescribir log sin los desaparecidos
         with open(META_LOG, "w", encoding="utf-8") as f:
             for item in active_items:
                 f.write(json.dumps(item) + "\n")
-        print(f"  ✨ Registro de metadatos limpiado ({missing_files} entradas eliminadas).")
 
-    # 2. Buscar archivos en disco que no estén en metadatos
-    registered_paths = {Path(i["saved_path"]).resolve() for i in active_items}
-    orphans_found = 0
-    
-    # Escaneamos STORAGE_DIR recursivamente
-    for p in STORAGE_DIR.rglob("*"):
-        if p.is_file() and not p.name.startswith(".") and p != META_LOG:
-            # Ignorar carpetas de sistema
-            if ".cache" in p.parts or ".trash" in p.parts or ".vault" in p.parts:
-                continue
-                
-            if p.resolve() not in registered_paths:
-                orphans_found += 1
-                if dry_run:
-                    print(f"  [DISK] Huérfano detectado: {p.relative_to(STORAGE_DIR)}")
-                else:
-                    target = TRASH_DIR / p.relative_to(STORAGE_DIR).name
-                    if target.exists():
-                        target = TRASH_DIR / f"{int(os.path.getmtime(p))}_{p.name}"
-                    shutil.move(p, target)
-                    print(f"  [DISK] Movido a .trash: {p.name}")
-
-    # 3. Limpiar miniaturas sin uso
-    active_ids = {i.get("id") for i in active_items if i.get("id")}
-    orphans_thumbs = 0
-    for t in CACHE_DIR.glob("*.jpg"):
-        tid = t.stem
-        if tid not in active_ids:
-            orphans_thumbs += 1
+    # 2. Buscar archivos no registrados
+    reg_paths = {Path(i["saved_path"]).resolve() for i in active_items}
+    orphans = 0
+    for p in UPLOAD_DIR.rglob("*"):
+        if p.is_file() and not p.name.startswith(".") and p.resolve() not in reg_paths:
+            orphans += 1
             if dry_run:
-                print(f"  [THUMB] Miniatura sin uso: {t.name}")
+                print(f"  [DISK] Archivo no registrado: {p.name}")
             else:
-                t.unlink()
+                target = TRASH_DIR / p.name
+                shutil.move(p, target)
+                print(f"  [DISK] Movido a .trash: {p.name}")
 
-    print(f"\n📊 Resumen de limpieza:")
-    print(f"  - Entradas de log inválidas: {missing_files}")
-    print(f"  - Archivos huérfanos en disco: {orphans_found}")
-    print(f"  - Miniaturas sin uso: {orphans_thumbs}")
-    
-    if dry_run:
-        print("\n⚠️  Esto fue un DRY RUN. Usa --force para aplicar cambios.")
+    print(f"📊 Resumen: {missing_files} registros muertos, {orphans} archivos huérfanos.")
 
 if __name__ == "__main__":
     import sys
     ensure_dirs()
-    
-    if "--thumbnails" in sys.argv:
-        run_thumbnails()
+    if "--scan" in sys.argv:
+        run_full_scan()
     elif "--cleanup" in sys.argv:
         force = "--force" in sys.argv
         run_cleanup(dry_run=not force)
+    elif "--thumbnails" in sys.argv:
+        run_thumbnails()
     else:
-        print("Opciones:")
-        print("  --thumbnails      Genera miniaturas faltantes")
-        print("  --cleanup         Busca archivos huérfanos (modo seguro)")
-        print("  --cleanup --force Ejecuta la limpieza real (mueve a .trash)")
+        print("Vault Maintenance Tool")
+        print("  --scan            Escanea disco y registra todo (Recomendado)")
+        print("  --thumbnails      Solo genera miniaturas de lo ya registrado")
+        print("  --cleanup         Busca archivos huérfanos")
+        print("  --cleanup --force Ejecuta la limpieza")
