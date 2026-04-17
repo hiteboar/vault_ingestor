@@ -359,7 +359,8 @@ export default function App() {
       <View style={styles.header}>
         <View>
             <Text style={styles.headerTitle}>Vault ({role === 'admin' ? 'Admin' : 'Estándar'})</Text>
-            <Text style={styles.headerSub}>IP: {url.replace('http://', '').split(':')[0]}</Text>
+            <Text style={styles.headerSub}>IP: {(url || '').replace('http://', '').split(':')[0] || '...'}</Text>
+
         </View>
         <TouchableOpacity onPress={loadData} disabled={loading}>
            {loading ? <ActivityIndicator color="#3b82f6"/> : <Text style={styles.headerAction}>Actualizar</Text>}
@@ -403,7 +404,8 @@ export default function App() {
                     <FlatList 
                         horizontal
                         showsHorizontalScrollIndicator={false}
-                        data={['All', ...new Set(items.filter(i => i.context === 'root').map(i => i.timestamp.split('-')[0]))]}
+                        data={['All', ...new Set(items.filter(i => i.context === 'root').map(i => (i.timestamp || '').split('-')[0]).filter(y => y))]}
+
                         keyExtractor={y => y}
                         renderItem={({item: y}) => (
                            <TouchableOpacity onPress={() => setSelectedYear(y)} style={selectedYear === y ? styles.filterOptActive : styles.filterOpt}>
@@ -518,7 +520,8 @@ export default function App() {
                   
                   {/* File Preview Logic */}
                   {(() => {
-                      const ext = previewItem.name.split('.').pop().toLowerCase();
+                      const name = previewItem?.name || 'archivo';
+                      const ext = name.split('.').pop().toLowerCase();
                       const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
                       const isVideo = ['mp4', 'mov', 'm4v', 'avi', 'mkv', 'webm'].includes(ext);
                       
@@ -614,7 +617,8 @@ function Thumbnail({ item, onPress }) {
     const [src, setSrc] = useState(null);
     const [failed, setFailed] = useState(false);
     
-    const ext = item.name.split('.').pop().toLowerCase();
+    const name = item?.name || 'archivo';
+    const ext = name.split('.').pop().toLowerCase();
     const isVideo = ['mp4', 'mov', 'm4v', 'avi', 'mkv', 'webm'].includes(ext);
 
     useEffect(() => {
