@@ -62,7 +62,8 @@ export const fetchItems = async () => {
 
 export const getMediaUrl = async (item) => {
     const { url, token } = await getConnection();
-    return { uri: `${url}/api/media/${item.web_path}`, headers: { 'X-Device-Token': token } };
+    const encodedPath = item.web_path.split('/').map(segment => encodeURIComponent(segment)).join('/');
+    return { uri: `${url}/api/media/${encodedPath}`, headers: { 'X-Device-Token': token } };
 };
 
 export const getThumbUrl = async (item) => {
@@ -80,7 +81,7 @@ export const uploadFile = async (uri, name, mimeType, folder) => {
         name,
         type: mimeType
     });
-    formData.append('mobile_upload', folder);
+    formData.append('context', folder);
 
     const resp = await fetch(`${url}/api/upload`, {
         method: 'POST',

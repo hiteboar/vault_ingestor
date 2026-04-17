@@ -18,6 +18,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Video, ResizeMode } from 'expo-av';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
+import { ActivityIndicator } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import * as api from './api';
@@ -61,6 +62,8 @@ export default function App() {
   const [uploading, setUploading] = useState(false);
   const [previewItem, setPreviewItem] = useState(null);
   const [previewSrc, setPreviewSrc] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState(null);
   const [inviteModal, setInviteModal] = useState(false);
   const [inviteData, setInviteData] = useState(null);
   const [newFolderModal, setNewFolderModal] = useState(false);
@@ -260,9 +263,14 @@ export default function App() {
   };
 
   const openPreview = async (item) => {
-    const src = await api.getMediaUrl(item);
-    setPreviewSrc(src);
+    setPreviewSrc(null); // Reset
     setPreviewItem(item);
+    try {
+        const src = await api.getMediaUrl(item);
+        setPreviewSrc(src);
+    } catch (e) {
+        Alert.alert("Error", "No se pudo obtener la URL del archivo");
+    }
   };
 
   const handleDownload = async () => {
@@ -526,7 +534,18 @@ export default function App() {
                       const isVideo = ['mp4', 'mov', 'm4v', 'avi', 'mkv', 'webm'].includes(ext);
                       
                       if (isImage) {
-                          return <Image source={previewSrc} style={styles.modalImage} resizeMode="contain" />;
+                          return (
+                              <View style={styles.modalImageContainer}>
+                                  <Image 
+                                      source={previewSrc} 
+                                      style={styles.modalImage} 
+                                      resizeMode="contain" 
+                                      onLoadStart={() => setPreviewLoading(true)}
+                                      onLoadEnd={() => setPreviewLoading(false)}
+                                  />
+                                  {previewLoading && <ActivityIndicator size="large" color="#3b82f6" style={styles.spinner} />}
+                              </View>
+                          );
                       } else if (isVideo) {
                           return (
                               <Video
@@ -722,7 +741,9 @@ const styles = StyleSheet.create({
   modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', alignItems: 'center' },
   modalClose: { position: 'absolute', top: 50, right: 20, zIndex: 10, padding: 10, backgroundColor: '#1e293b', borderRadius: 8 },
   modalCloseText: { color: '#fff', fontWeight: 'bold' },
-  modalImage: { width: '90%', height: '65%', borderRadius: 12 },
+  modalImage: { width: '100%', height: '100%' },
+  modalImageContainer: { width: '90%', height: '70%', borderRadius: 12, overflow: 'hidden', backgroundColor: '#1e293b', justifyContent: 'center', alignItems: 'center' },
+  spinner: { position: 'absolute' },
   modalActionsRow: { flexDirection: 'row', gap: 15, position: 'absolute', bottom: 50, width: '90%', justifyContent: 'center' },
   modalSmallBtn: { flex: 1, maxWidth: 180, backgroundColor: '#3b82f6', padding: 18, borderRadius: 16, alignItems: 'center' },
   adminBar: { padding: 10 },

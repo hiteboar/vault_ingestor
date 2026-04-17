@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 import psutil
-from fastapi import FastAPI, HTTPException, Body, Header, UploadFile, File
+from fastapi import FastAPI, HTTPException, Body, Header, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -381,7 +381,7 @@ async def get_thumbnail(item_id: str):
 @app.post("/api/upload")
 async def upload_file(
     file: UploadFile = File(...), 
-    context: str = Body("root"),
+    context: str = Form("root"),
     x_device_token: str = Header(...)
 ):
     """Securely uploads a file from the mobile app."""
