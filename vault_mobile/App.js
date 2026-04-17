@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Video, ResizeMode } from 'expo-av';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
@@ -553,7 +553,7 @@ export default function App() {
 
                   <View style={styles.modalActionsRow}>
                       <TouchableOpacity style={styles.modalSmallBtn} onPress={handleDownload}>
-                          <Text style={styles.buttonText}>📤 Compartir</Text>
+                          <Text style={styles.buttonText}>📤 Descargar</Text>
                       </TouchableOpacity>
                       {role === 'admin' && (
                           <TouchableOpacity style={[styles.modalSmallBtn, {backgroundColor: '#ef4444'}]} onPress={handleDeleteItem}>
@@ -722,9 +722,9 @@ const styles = StyleSheet.create({
   modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', alignItems: 'center' },
   modalClose: { position: 'absolute', top: 50, right: 20, zIndex: 10, padding: 10, backgroundColor: '#1e293b', borderRadius: 8 },
   modalCloseText: { color: '#fff', fontWeight: 'bold' },
-  modalImage: { width: '100%', height: '70%' },
-  modalActionsRow: { flexDirection: 'row', gap: 15, position: 'absolute', bottom: 50, width: '85%' },
-  modalSmallBtn: { flex: 1, backgroundColor: '#3b82f6', padding: 18, borderRadius: 12, alignItems: 'center' },
+  modalImage: { width: '90%', height: '65%', borderRadius: 12 },
+  modalActionsRow: { flexDirection: 'row', gap: 15, position: 'absolute', bottom: 50, width: '90%', justifyContent: 'center' },
+  modalSmallBtn: { flex: 1, maxWidth: 180, backgroundColor: '#3b82f6', padding: 18, borderRadius: 16, alignItems: 'center' },
   adminBar: { padding: 10 },
   inviteButtonFull: { backgroundColor: '#10b981', padding: 12, borderRadius: 8, alignItems: 'center' },
   promptCard: { backgroundColor: '#1e293b', padding: 25, borderRadius: 16, width: '85%', borderWidth: 1, borderColor: '#334155' },

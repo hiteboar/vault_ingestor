@@ -36,6 +36,7 @@ STORAGE_DIR = Path(os.getenv("STORAGE_DIR", str(BASE_DIR / "vault_storage"))).re
 META_LOG = Path(os.getenv("META_LOG", str(STORAGE_DIR / "metadata.jsonl"))).resolve()
 CACHE_DIR = STORAGE_DIR / ".cache" / "thumbnails"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
+AUDIT_LOG = STORAGE_DIR / "audit.log"
 ENV_PATH = BASE_DIR / ".env"
 
 # Initialize Auth
@@ -46,6 +47,30 @@ async def verify_device(x_device_token: Optional[str] = Header(None)):
     if not x_device_token or not auth.is_token_valid(x_device_token):
         raise HTTPException(status_code=401, detail="Unauthorized: Device not linked")
     return x_device_token
+
+def log_audit(action: str, path: Path, device_info: dict):
+    """Records an action to the audit log."""
+    try:
+        import time
+        from datetime import datetime
+        
+        # Calculate relative path if possible
+        try:
+            rel_path = str(path.relative_to(STORAGE_DIR))
+        except ValueError:
+            rel_path = str(path.name)
+            
+        entry = {
+            "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "action": action,
+            "path": rel_path,
+            "user": device_info.get("name", "unknown_device"),
+            "role": device_info.get("role", "standard")
+        }
+        with open(AUDIT_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception as e:
+        print(f"[AUDIT_ERROR] {e}")
 
 cloudflare_tunnel = None
 
@@ -93,6 +118,10 @@ async def get_items(x_device_token: str = Header(...)):
                     try:
                         item = json.loads(line)
                         saved_path = Path(item["saved_path"])
+                        
+                        # Verify physical existence
+                        if not saved_path.exists():
+                            continue
                         
                         # Verify access for standard users
                         if role != "admin":
@@ -403,6 +432,9 @@ async def upload_file(
         with open(META_LOG, "a", encoding="utf-8") as f:
             f.write(json.dumps(item) + "\n")
             
+        # Log Audit
+        log_audit("UPLOAD", file_path, device)
+            
         return {"status": "success", "id": item["id"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -448,6 +480,9 @@ async def delete_item(item_id: str, x_device_token: str = Header(...)):
         with open(META_LOG, "w", encoding="utf-8") as f:
             f.writelines(remaining_items)
 
+        # Log Audit
+        log_audit("DELETE_ITEM", Path(target_item["saved_path"]), device)
+
         return {"status": "success", "message": "Item deleted"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -486,6 +521,9 @@ async def delete_folder(folder_name: str, x_device_token: str = Header(...)):
                             
             with open(META_LOG, "w", encoding="utf-8") as f:
                 f.writelines(remaining_items)
+                
+        # Log Audit
+        log_audit("DELETE_FOLDER", folder_path, device)
                 
         return {"status": "success", "message": f"Folder {folder_name} deleted"}
     except Exception as e:
