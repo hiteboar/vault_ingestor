@@ -323,7 +323,7 @@ async def get_thumbnail(item_id: str):
 @app.post("/api/upload")
 async def upload_file(
     file: UploadFile = File(...), 
-    context: str = Body("mobile_upload"),
+    context: str = Body("root"),
     x_device_token: str = Header(...)
 ):
     """Securely uploads a file from the mobile app."""
@@ -334,14 +334,26 @@ async def upload_file(
     role = device.get("role", "standard")
     allowed_folders = device.get("allowed_folders", [])
     
+    # Check permission for the targeted folder
     if role != "admin" and context not in allowed_folders and "*" not in allowed_folders:
         raise HTTPException(status_code=403, detail="No permission to upload to this folder")
         
     try:
         import secrets
         import time
-        # Create context folder
-        save_folder = STORAGE_DIR / context
+        from datetime import datetime
+        
+        # New structure: uploaded_files/
+        base_upload = STORAGE_DIR / "uploaded_files"
+        
+        if context == "root":
+            # Date based: uploaded_files/YYYY/MM
+            now = datetime.now()
+            save_folder = base_upload / str(now.year) / f"{now.month:02d}"
+        else:
+            # Named folder: uploaded_files/named_folder
+            save_folder = base_upload / context
+            
         save_folder.mkdir(parents=True, exist_ok=True)
         
         file_path = save_folder / file.filename
@@ -356,12 +368,97 @@ async def upload_file(
             "name": file.filename,
             "saved_path": str(file_path),
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "source": "mobile"
+            "source": "mobile",
+            "context": context
         }
         with open(META_LOG, "a", encoding="utf-8") as f:
             f.write(json.dumps(item) + "\n")
             
         return {"status": "success", "id": item["id"]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/items/{item_id}")
+async def delete_item(item_id: str, x_device_token: str = Header(...)):
+    """Deletes a file and its metadata (Admin only)."""
+    device = auth.get_device_info(x_device_token)
+    if not device or device.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can delete items")
+
+    if not META_LOG.exists():
+        raise HTTPException(status_code=404, detail="Metadata log not found")
+
+    target_item = None
+    remaining_items = []
+    
+    try:
+        # Read and find the item to delete
+        with open(META_LOG, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    item = json.loads(line)
+                    if item.get("id") == item_id:
+                        target_item = item
+                    else:
+                        remaining_items.append(line)
+        
+        if not target_item:
+            raise HTTPException(status_code=404, detail="Item not found")
+
+        # 1. Delete physical file
+        p = Path(target_item["saved_path"])
+        if p.exists():
+            p.unlink()
+            
+        # 2. Delete thumbnail if exists
+        thumb_path = CACHE_DIR / f"{item_id}.jpg"
+        if thumb_path.exists():
+            thumb_path.unlink()
+
+        # 3. Rewrite metadata log
+        with open(META_LOG, "w", encoding="utf-8") as f:
+            f.writelines(remaining_items)
+
+        return {"status": "success", "message": "Item deleted"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/folders/{folder_name}")
+async def delete_folder(folder_name: str, x_device_token: str = Header(...)):
+    """Deletes a named folder and all its items (Admin only)."""
+    device = auth.get_device_info(x_device_token)
+    if not device or device.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can delete folders")
+    
+    if folder_name == "root":
+        raise HTTPException(status_code=400, detail="Cannot delete root/timeline folder")
+
+    try:
+        base_upload = STORAGE_DIR / "uploaded_files"
+        folder_path = base_upload / folder_name
+        
+        # 1. Physically delete the folder and files
+        if folder_path.exists():
+            shutil.rmtree(folder_path)
+            
+        # 2. Clean up metadata log
+        remaining_items = []
+        if META_LOG.exists():
+            with open(META_LOG, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        item = json.loads(line)
+                        saved_path = Path(item["saved_path"])
+                        try:
+                            # If the path is inside the folder_path, skip it (delete from log)
+                            saved_path.relative_to(folder_path)
+                        except ValueError:
+                            remaining_items.append(line)
+                            
+            with open(META_LOG, "w", encoding="utf-8") as f:
+                f.writelines(remaining_items)
+                
+        return {"status": "success", "message": f"Folder {folder_name} deleted"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

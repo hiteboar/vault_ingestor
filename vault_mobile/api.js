@@ -103,3 +103,17 @@ export const verifyPin = async (baseUrl, pin) => {
     const resp = await axios.post(`${url}/api/auth/verify`, { pin });
     return resp.data.token;
 };
+
+export const deleteItem = async (itemId) => {
+    const client = await getClient();
+    if (!client) throw new Error('Not connected');
+    const resp = await client.delete(`/api/items/${itemId}`);
+    return resp.data;
+};
+
+export const deleteFolder = async (folderName) => {
+    const client = await getClient();
+    if (!client) throw new Error('Not connected');
+    const resp = await client.delete(`/api/folders/${folderName}`);
+    return resp.data;
+};

@@ -61,6 +61,12 @@ export default function App() {
   const [previewSrc, setPreviewSrc] = useState(null);
   const [inviteModal, setInviteModal] = useState(false);
   const [inviteData, setInviteData] = useState(null);
+  const [newFolderModal, setNewFolderModal] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  
+  // Date filters for timeline
+  const [selectedYear, setSelectedYear] = useState('All');
+  const [selectedMonth, setSelectedMonth] = useState('All');
 
   useEffect(() => {
     checkConnection();
@@ -145,7 +151,44 @@ export default function App() {
     setShowScanner(true);
   };
 
-  const handleBarcodeScanned = ({ type, data }) => {
+  const handleDeleteItem = async () => {
+    if (!previewItem) return;
+    if (!confirm('¿Estás seguro de que quieres eliminar este archivo?')) return;
+    
+    try {
+        setLoading(true);
+        await api.deleteItem(previewItem.id);
+        setPreviewItem(null);
+        await loadData();
+    } catch (e) {
+        alert('Error al eliminar: ' + e.message);
+    } finally {
+        setLoading(false);
+    }
+  };
+
+  const handleDeleteFolder = async () => {
+      if (currentFolder === 'root') return;
+      if (!confirm(`¿Estás seguro de que quieres eliminar la carpeta "${currentFolder}" y TODOS sus archivos?`)) return;
+      
+      try {
+          setLoading(true);
+          await api.deleteFolder(currentFolder);
+          setCurrentFolder('root');
+          await loadData();
+      } catch (e) {
+          alert('Error al eliminar carpeta: ' + e.message);
+      } finally {
+          setLoading(false);
+      }
+  };
+
+  const handleCreateFolder = () => {
+      if (!newFolderName.trim()) return;
+      setCurrentFolder(newFolderName.trim());
+      setNewFolderName('');
+      setNewFolderModal(false);
+  };
     setScanned(true);
     setShowScanner(false);
     try {
@@ -296,28 +339,63 @@ export default function App() {
         </TouchableOpacity>
       </View>
 
-      {/* Folder Selector */}
+      {/* Folder Selector & Management */}
       {view === 'gallery' && (
-        <View style={styles.folderSelector}>
-            <FlatList 
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                data={['root', ...new Set(items.map(i => {
-                    const parts = i.web_path ? i.web_path.split('/') : [];
-                    return parts.length > 1 ? parts[0] : 'root';
-                }).filter(f => f !== 'root'))]}
-                keyExtractor={(f) => f}
-                renderItem={({ item: f }) => (
-                    <TouchableOpacity 
-                        style={[styles.folderChip, currentFolder === f && styles.folderChipActive]}
-                        onPress={() => setCurrentFolder(f)}
-                    >
-                        <Text style={[styles.folderChipText, currentFolder === f && styles.folderChipTextActive]}>
-                            {f === 'root' ? '🏠 Inicio' : `📁 ${f}`}
-                        </Text>
+        <View style={styles.folderSelectorContainer}>
+            <View style={styles.folderSelector}>
+                <FlatList 
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    data={['root', ...new Set(items.map(i => {
+                        // Named folders are those where context isn't 'root'
+                        return i.context && i.context !== 'root' ? i.context : null;
+                    }).filter(f => f !== null))]}
+                    keyExtractor={(f) => f}
+                    renderItem={({ item: f }) => (
+                        <TouchableOpacity 
+                            style={[styles.folderChip, currentFolder === f && styles.folderChipActive]}
+                            onPress={() => setCurrentFolder(f)}
+                        >
+                            <Text style={[styles.folderChipText, currentFolder === f && styles.folderChipTextActive]}>
+                                {f === 'root' ? '📅 Línea de Tiempo' : `📁 ${f}`}
+                            </Text>
+                        </TouchableOpacity>
+                    )}
+                />
+                {role === 'admin' && (
+                    <TouchableOpacity style={styles.addFolderBtn} onPress={() => setNewFolderModal(true)}>
+                        <Text style={styles.addFolderText}>＋</Text>
                     </TouchableOpacity>
                 )}
-            />
+            </View>
+
+            {/* Timeline Filters (Year/Month) */}
+            {currentFolder === 'root' && (
+                <View style={styles.filterBar}>
+                    <Text style={styles.filterLabel}>Filtrar:</Text>
+                    <FlatList 
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        data={['All', ...new Set(items.filter(i => i.context === 'root').map(i => i.timestamp.split('-')[0]))]}
+                        keyExtractor={y => y}
+                        renderItem={({item: y}) => (
+                           <TouchableOpacity onPress={() => setSelectedYear(y)} style={selectedYear === y ? styles.filterOptActive : styles.filterOpt}>
+                               <Text style={selectedYear === y ? styles.filterOptTextActive : styles.filterOptText}>{y}</Text>
+                           </TouchableOpacity>
+                        )}
+                    />
+                </View>
+            )}
+
+            {/* Folder Actions (Delete) */}
+            {currentFolder !== 'root' && role === 'admin' && (
+                <View style={styles.folderActions}>
+                    <Text style={styles.folderPathText}>Gestionando: {currentFolder}</Text>
+                    <TouchableOpacity onPress={handleDeleteFolder} style={styles.deleteFolderBtn}>
+                        <Text style={styles.deleteFolderText}>🗑️ Eliminar Carpeta</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
         </View>
       )}
 
@@ -336,24 +414,26 @@ export default function App() {
         <View style={{ flex: 1 }}>
             {role === 'admin' && (
                 <View style={styles.adminBar}>
-                    <TextInput 
-                        style={styles.folderInput}
-                        value={currentFolder}
-                        onChangeText={setCurrentFolder}
-                        placeholder="Cambiar o Crear Carpeta"
-                        placeholderTextColor="#64748b"
-                    />
-                    <TouchableOpacity style={styles.inviteButton} onPress={handleCreateInvite}>
-                        <Text style={styles.inviteText}>Generar P2P</Text>
+                    <TouchableOpacity style={styles.inviteButtonFull} onPress={handleCreateInvite}>
+                        <Text style={styles.inviteText}>Generar Acceso P2P a "{currentFolder === 'root' ? 'Línea de Tiempo' : currentFolder}"</Text>
                     </TouchableOpacity>
                 </View>
             )}
 
             <FlatList 
             data={items.filter(i => {
-                const parts = i.web_path ? i.web_path.split('/') : [];
-                const folder = parts.length > 1 ? parts[0] : 'root';
-                return folder === currentFolder;
+                // Folder logic:
+                // 1. If searching for root, show everything with context root (date-organized)
+                if (currentFolder === 'root') {
+                    if (i.context !== 'root') return false;
+                    // Apply year filter
+                    if (selectedYear !== 'All') {
+                        if (!i.timestamp.startsWith(selectedYear)) return false;
+                    }
+                    return true;
+                }
+                // 2. Otherwise, match by context (named folder)
+                return i.context === currentFolder;
             })}
             numColumns={COLUMN_COUNT}
             keyExtractor={(item) => item.id}
@@ -409,9 +489,43 @@ export default function App() {
                       <Text style={styles.modalCloseText}>Cerrar</Text>
                   </TouchableOpacity>
                   <Image source={previewSrc} style={styles.modalImage} resizeMode="contain" />
-                  <TouchableOpacity style={styles.modalActionBtn} onPress={handleDownload}>
-                      <Text style={styles.buttonText}>📤 Compartir / Guardar Fichero</Text>
-                  </TouchableOpacity>
+                  <View style={styles.modalActionsRow}>
+                      <TouchableOpacity style={styles.modalSmallBtn} onPress={handleDownload}>
+                          <Text style={styles.buttonText}>📤 Compartir</Text>
+                      </TouchableOpacity>
+                      {role === 'admin' && (
+                          <TouchableOpacity style={[styles.modalSmallBtn, {backgroundColor: '#ef4444'}]} onPress={handleDeleteItem}>
+                               <Text style={styles.buttonText}>🗑️ Borrar</Text>
+                          </TouchableOpacity>
+                      )}
+                  </View>
+              </View>
+          </Modal>
+      )}
+
+      {/* New Folder Modal */}
+      {newFolderModal && (
+          <Modal visible={true} transparent={true} animationType="fade">
+              <View style={styles.modalBg}>
+                  <View style={styles.promptCard}>
+                      <Text style={styles.promptTitle}>Nueva Carpeta</Text>
+                      <TextInput 
+                        style={styles.input} 
+                        placeholder="Nombre de la carpeta" 
+                        placeholderTextColor="#64748b"
+                        value={newFolderName}
+                        onChangeText={setNewFolderName}
+                        autoFocus
+                      />
+                      <View style={{flexDirection:'row', gap: 10}}>
+                          <TouchableOpacity style={[styles.button, {flex:1, backgroundColor:'#334155'}]} onPress={() => setNewFolderModal(false)}>
+                              <Text style={styles.buttonText}>Cancelar</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity style={[styles.button, {flex:1}]} onPress={handleCreateFolder}>
+                              <Text style={styles.buttonText}>Crear</Text>
+                          </TouchableOpacity>
+                      </View>
+                  </View>
               </View>
           </Modal>
       )}
@@ -467,11 +581,24 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#fff' },
   headerSub: { fontSize: 12, color: '#64748b', marginTop: 2 },
   headerAction: { color: '#3b82f6', fontWeight: 'bold' },
-  folderSelector: { paddingVertical: 10, paddingHorizontal: 15, borderBottomWidth: 1, borderBottomColor: '#1e293b' },
+  folderSelectorContainer: { borderBottomWidth: 1, borderBottomColor: '#1e293b' },
+  folderSelector: { flexDirection: 'row', alignItems: 'center', padding: 10 },
+  addFolderBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#3b82f6', justifyContent: 'center', alignItems: 'center', marginLeft: 10 },
+  addFolderText: { color: '#fff', fontSize: 20, fontWeight: 'bold' },
   folderChip: { paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20, backgroundColor: '#1e293b', marginRight: 10, borderWidth: 1, borderColor: '#334155' },
   folderChipActive: { backgroundColor: '#3b82f6', borderColor: '#3b82f6' },
   folderChipText: { color: '#94a3b8', fontSize: 13, fontWeight: '600' },
   folderChipTextActive: { color: '#fff' },
+  filterBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, paddingBottom: 10 },
+  filterLabel: { color: '#64748b', fontSize: 11, fontWeight: 'bold', marginRight: 10 },
+  filterOpt: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 4, backgroundColor: '#0f172a', marginRight: 5 },
+  filterOptActive: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 4, backgroundColor: '#1e293b', marginRight: 5 },
+  filterOptText: { color: '#475569', fontSize: 11 },
+  filterOptTextActive: { color: '#3b82f6', fontSize: 11, fontWeight: 'bold' },
+  folderActions: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 15, paddingBottom: 10 },
+  folderPathText: { color: '#64748b', fontSize: 11 },
+  deleteFolderBtn: { padding: 5 },
+  deleteFolderText: { color: '#ef4444', fontSize: 11, fontWeight: 'bold' },
   tabs: { flexDirection: 'row', padding: 10 },
   tab: { flex: 1, padding: 10, alignItems: 'center', borderRadius: 8 },
   tabActive: { backgroundColor: '#1e293b' },
@@ -499,11 +626,12 @@ const styles = StyleSheet.create({
   modalClose: { position: 'absolute', top: 50, right: 20, zIndex: 10, padding: 10, backgroundColor: '#1e293b', borderRadius: 8 },
   modalCloseText: { color: '#fff', fontWeight: 'bold' },
   modalImage: { width: '100%', height: '70%' },
-  modalActionBtn: { position: 'absolute', bottom: 50, backgroundColor: '#3b82f6', padding: 18, borderRadius: 12, width: '80%', alignItems: 'center' },
-  adminBar: { flexDirection: 'row', padding: 10, gap: 10 },
-  folderInput: { flex: 1, backgroundColor: '#1e293b', color: '#fff', padding: 12, borderRadius: 8, borderWidth:1, borderColor:'#334155' },
-  inviteButton: { justifyContent: 'center', alignItems: 'center', backgroundColor: '#10b981', paddingHorizontal: 15, borderRadius: 8 },
-  inviteText: { color: '#fff', fontWeight: 'bold', fontSize: 12 },
+  modalActionsRow: { flexDirection: 'row', gap: 15, position: 'absolute', bottom: 50, width: '85%' },
+  modalSmallBtn: { flex: 1, backgroundColor: '#3b82f6', padding: 18, borderRadius: 12, alignItems: 'center' },
+  adminBar: { padding: 10 },
+  inviteButtonFull: { backgroundColor: '#10b981', padding: 12, borderRadius: 8, alignItems: 'center' },
+  promptCard: { backgroundColor: '#1e293b', padding: 25, borderRadius: 16, width: '85%', borderWidth: 1, borderColor: '#334155' },
+  promptTitle: { color: '#fff', fontSize: 18, fontWeight: 'bold', marginBottom: 20 },
   qrCard: { backgroundColor: '#fff', padding: 30, borderRadius: 24, width: '85%', alignItems: 'center' },
   qrTitle: { fontSize: 22, fontWeight: 'bold', color: '#0f172a', marginBottom: 15 },
   qrText: { textAlign:'center', color:'#475569', marginBottom: 20 },
