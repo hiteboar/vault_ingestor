@@ -11,9 +11,11 @@ import {
   SafeAreaView,
   StatusBar,
   Dimensions,
-  Modal
+  Modal,
+  Alert
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { Video, ResizeMode } from 'expo-av';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
@@ -153,34 +155,58 @@ export default function App() {
 
   const handleDeleteItem = async () => {
     if (!previewItem) return;
-    if (!confirm('¿Estás seguro de que quieres eliminar este archivo?')) return;
     
-    try {
-        setLoading(true);
-        await api.deleteItem(previewItem.id);
-        setPreviewItem(null);
-        await loadData();
-    } catch (e) {
-        alert('Error al eliminar: ' + e.message);
-    } finally {
-        setLoading(false);
-    }
+    Alert.alert(
+        'Eliminar Archivo',
+        '¿Estás seguro de que quieres eliminar este archivo permanentemente?',
+        [
+            { text: 'Cancelar', style: 'cancel' },
+            { 
+                text: 'Eliminar', 
+                style: 'destructive',
+                onPress: async () => {
+                    try {
+                        setLoading(true);
+                        await api.deleteItem(previewItem.id);
+                        setPreviewItem(null);
+                        await loadData();
+                    } catch (e) {
+                        alert('Error al eliminar: ' + e.message);
+                    } finally {
+                        setLoading(false);
+                    }
+                }
+            }
+        ]
+    );
   };
 
   const handleDeleteFolder = async () => {
       if (currentFolder === 'root') return;
-      if (!confirm(`¿Estás seguro de que quieres eliminar la carpeta "${currentFolder}" y TODOS sus archivos?`)) return;
       
-      try {
-          setLoading(true);
-          await api.deleteFolder(currentFolder);
-          setCurrentFolder('root');
-          await loadData();
-      } catch (e) {
-          alert('Error al eliminar carpeta: ' + e.message);
-      } finally {
-          setLoading(false);
-      }
+      Alert.alert(
+          'Eliminar Carpeta',
+          `¿Estás seguro de que quieres eliminar la carpeta "${currentFolder}" y TODOS sus archivos físicos?`,
+          [
+              { text: 'Cancelar', style: 'cancel' },
+              { 
+                  text: 'Borrar Todo', 
+                  style: 'destructive',
+                  onPress: async () => {
+                        try {
+                            setLoading(true);
+                            await api.deleteFolder(currentFolder);
+                            setCurrentFolder('root');
+                            await loadData();
+                        } catch (e) {
+                            alert('Error al eliminar carpeta: ' + e.message);
+                        } finally {
+                            setLoading(false);
+                        }
+                  }
+              }
+          ]
+      );
   };
 
   const handleCreateFolder = () => {
@@ -189,6 +215,7 @@ export default function App() {
       setNewFolderName('');
       setNewFolderModal(false);
   };
+  const handleBarcodeScanned = ({ type, data }) => {
     setScanned(true);
     setShowScanner(false);
     try {
@@ -488,7 +515,39 @@ export default function App() {
                   <TouchableOpacity style={styles.modalClose} onPress={() => setPreviewItem(null)}>
                       <Text style={styles.modalCloseText}>Cerrar</Text>
                   </TouchableOpacity>
-                  <Image source={previewSrc} style={styles.modalImage} resizeMode="contain" />
+                  
+                  {/* File Preview Logic */}
+                  {(() => {
+                      const ext = previewItem.name.split('.').pop().toLowerCase();
+                      const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
+                      const isVideo = ['mp4', 'mov', 'm4v', 'avi', 'mkv', 'webm'].includes(ext);
+                      
+                      if (isImage) {
+                          return <Image source={previewSrc} style={styles.modalImage} resizeMode="contain" />;
+                      } else if (isVideo) {
+                          return (
+                              <Video
+                                  source={previewSrc}
+                                  rate={1.0}
+                                  volume={1.0}
+                                  isMuted={false}
+                                  resizeMode={ResizeMode.CONTAIN}
+                                  shouldPlay
+                                  useNativeControls
+                                  style={styles.modalImage}
+                              />
+                          );
+                      } else {
+                          return (
+                              <View style={styles.unsupportedCard}>
+                                  <Text style={styles.unsupportedIcon}>📄</Text>
+                                  <Text style={styles.unsupportedText}>Previsualización no disponible para .{ext}</Text>
+                                  <Text style={styles.unsupportedSub}>Descarga el archivo para ver su contenido.</Text>
+                              </View>
+                          );
+                      }
+                  })()}
+
                   <View style={styles.modalActionsRow}>
                       <TouchableOpacity style={styles.modalSmallBtn} onPress={handleDownload}>
                           <Text style={styles.buttonText}>📤 Compartir</Text>
@@ -553,14 +612,48 @@ export default function App() {
 // Componente helper para cargar thmbnails resolviendo sus Headers
 function Thumbnail({ item, onPress }) {
     const [src, setSrc] = useState(null);
+    const [failed, setFailed] = useState(false);
+    
+    const ext = item.name.split('.').pop().toLowerCase();
+    const isVideo = ['mp4', 'mov', 'm4v', 'avi', 'mkv', 'webm'].includes(ext);
+
     useEffect(() => {
-        api.getThumbUrl(item).then(s => setSrc(s)).catch(() => {});
+        api.getThumbUrl(item)
+            .then(s => setSrc(s))
+            .catch(() => setFailed(true));
     }, [item]);
 
-    if(!src) return <View style={styles.imageContainer} />;
+    const renderOverlay = () => {
+        if (isVideo) {
+            return (
+                <View style={styles.videoOverlay}>
+                    <Text style={styles.videoIcon}>▶</Text>
+                </View>
+            );
+        }
+        return null;
+    };
+
+    if (failed || !src) {
+        return (
+            <TouchableOpacity style={styles.imageContainer} onPress={onPress}>
+                <View style={styles.filePlaceholder}>
+                    <Text style={styles.fileIcon}>{isVideo ? '🎬' : '📄'}</Text>
+                    <Text style={styles.fileNameText} numberOfLines={2}>{item.name}</Text>
+                </View>
+            </TouchableOpacity>
+        );
+    }
+
     return (
         <TouchableOpacity style={styles.imageContainer} onPress={onPress}>
-            <Image source={src} style={styles.thumbnail} resizeMode="cover" />
+            <Image 
+                source={src} 
+                style={styles.thumbnail} 
+                resizeMode="cover" 
+                onError={() => setFailed(true)}
+            />
+            {renderOverlay()}
         </TouchableOpacity>
     );
 }
@@ -635,5 +728,14 @@ const styles = StyleSheet.create({
   qrCard: { backgroundColor: '#fff', padding: 30, borderRadius: 24, width: '85%', alignItems: 'center' },
   qrTitle: { fontSize: 22, fontWeight: 'bold', color: '#0f172a', marginBottom: 15 },
   qrText: { textAlign:'center', color:'#475569', marginBottom: 20 },
-  qrPin: { fontSize: 40, fontWeight: 'bold', color: '#3b82f6', letterSpacing: 5 }
+  qrPin: { fontSize: 40, fontWeight: 'bold', color: '#3b82f6', letterSpacing: 5 },
+  filePlaceholder: { flex: 1, backgroundColor: '#1e293b', justifyContent: 'center', alignItems: 'center', padding: 10 },
+  fileIcon: { fontSize: 32, marginBottom: 5 },
+  fileNameText: { color: '#94a3b8', fontSize: 10, textAlign: 'center', fontWeight: 'bold' },
+  videoOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'center', alignItems: 'center' },
+  videoIcon: { color: '#fff', fontSize: 24, opacity: 0.8 },
+  unsupportedCard: { backgroundColor: '#1e293b', padding: 40, borderRadius: 20, alignItems: 'center', width: '80%' },
+  unsupportedIcon: { fontSize: 64, marginBottom: 20 },
+  unsupportedText: { color: '#fff', fontSize: 18, fontWeight: 'bold', textAlign: 'center' },
+  unsupportedSub: { color: '#64748b', fontSize: 14, marginTop: 10, textAlign: 'center' }
 });

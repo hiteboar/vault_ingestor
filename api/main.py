@@ -310,11 +310,40 @@ async def get_thumbnail(item_id: str):
                             return FileResponse(thumb_path)
                         
                         import time
-                        # Generate thumbnail
-                        with Image.open(orig_path) as img:
-                            img.thumbnail((400, 400)) 
-                            img.save(thumb_path, "JPEG", quality=85)
-                        return FileResponse(thumb_path)
+                        import subprocess
+                        
+                        # Image types
+                        img_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+                        vid_exts = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+                        
+                        ext = orig_path.suffix.lower()
+                        
+                        if ext in img_exts:
+                            # Generate image thumbnail
+                            try:
+                                with Image.open(orig_path) as img:
+                                    img.thumbnail((400, 400)) 
+                                    img.save(thumb_path, "JPEG", quality=85)
+                                return FileResponse(thumb_path)
+                            except Exception as e:
+                                print(f"Error generating image thumbnail: {e}")
+                                
+                        elif ext in vid_exts:
+                            # Try generating video thumbnail via ffmpeg
+                            try:
+                                # ffmpeg -i input -ss 0.1 -vframes 1 output
+                                # ss 0.1 to avoid possible black frame at start
+                                cmd = [
+                                    "ffmpeg", "-y", "-i", str(orig_path),
+                                    "-ss", "00:00:01", "-vframes", "1",
+                                    "-q:v", "2", str(thumb_path)
+                                ]
+                                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                                if thumb_path.exists():
+                                    return FileResponse(thumb_path)
+                            except Exception as e:
+                                print(f"Error generating video thumbnail: {e}")
+                                
     except Exception:
         pass
     
