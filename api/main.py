@@ -1,6 +1,7 @@
 import json
 import os
 import asyncio
+import hashlib
 import shutil
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -124,8 +125,13 @@ class MetadataManager:
                 for line in f:
                     if line.strip():
                         item = json.loads(line)
-                        if "id" in item and "saved_path" in item:
-                            new_cache[item["id"]] = item["saved_path"]
+                        saved_path = item.get("saved_path")
+                        if saved_path:
+                            # Generar ID consistente con get_items si no existe
+                            item_id = item.get("id")
+                            if not item_id:
+                                item_id = hashlib.md5(saved_path.encode()).hexdigest()
+                            new_cache[item_id] = saved_path
             self._cache = new_cache
             print(f"[META] Caché cargada: {len(self._cache)} archivos indexados en RAM.")
         except Exception as e:
@@ -232,7 +238,6 @@ async def get_items(x_device_token: str = Header(...)):
 
                         # Ensure unique ID and basic structure
                         if "id" not in item:
-                            import hashlib
                             item["id"] = hashlib.md5(item.get("saved_path", "unknown").encode()).hexdigest()
 
                         # Generate web_path relative to STORAGE or BASE
