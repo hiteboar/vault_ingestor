@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import io
-from PIL import Image
+from PIL import Image as PILImage
 
 from core.auth import AuthManager
 from core.network import get_local_ip
@@ -60,6 +60,24 @@ ENV_PATH = BASE_DIR / ".env"
 # Initialize Auth (ahora usa STORAGE_DIR original pero AuthManager debe ser robusto internamente)
 # No obstante, pasamos un path seguro para evitar el crash inicial
 auth = AuthManager(get_robust_path(STORAGE_DIR / ".vault", "vault_auth"))
+
+def maintain_cache(cache_dir: Path, max_size_mb: int = 500):
+    """Elimina las miniaturas más antiguas si se supera el límite de espacio."""
+    try:
+        files = sorted(cache_dir.glob("*.webp"), key=lambda x: x.stat().st_mtime)
+        total_size = sum(f.stat().st_size for f in files)
+        
+        if total_size > max_size_mb * 1024 * 1024:
+            # Borrar el 20% más antiguo
+            to_delete = files[:max(1, len(files) // 5)]
+            for f in to_delete:
+                try:
+                    f.unlink()
+                except:
+                    pass
+            print(f"[CACHE] Limpieza automática: {len(to_delete)} miniaturas eliminadas.")
+    except Exception as e:
+        print(f"[CACHE_ERROR] Error en mantenimiento: {e}")
 
 async def verify_device(x_device_token: Optional[str] = Header(None)):
     """Simple security check for linked devices."""
@@ -350,8 +368,11 @@ async def get_pairing_qr():
 
 @app.get("/api/media/thumbnail/{item_id}")
 async def get_thumbnail(item_id: str):
-    """Returns a cached or generated thumbnail for an image."""
+    """Returns a cached or generated thumbnail for an image (optimized WebP)."""
     try:
+        if not META_LOG.exists():
+            return Response(status_code=404)
+            
         with open(META_LOG, "r", encoding="utf-8") as f:
             for line in f:
                 if item_id in line:
@@ -361,49 +382,55 @@ async def get_thumbnail(item_id: str):
                         if not orig_path.exists():
                             break
                         
-                        thumb_path = CACHE_DIR / f"{item_id}.jpg"
+                        # Usamos .webp para mayor ahorro de espacio
+                        thumb_path = CACHE_DIR / f"{item_id}.webp"
                         if thumb_path.exists():
                             return FileResponse(thumb_path)
                         
-                        import time
                         import subprocess
                         
-                        # Image types
+                        # Tipos de archivos compatibles
                         img_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
                         vid_exts = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
-                        
                         ext = orig_path.suffix.lower()
                         
-                        if ext in img_exts:
-                            # Generate image thumbnail
-                            try:
-                                with Image.open(orig_path) as img:
-                                    img.thumbnail((400, 400)) 
-                                    img.save(thumb_path, "JPEG", quality=85)
-                                return FileResponse(thumb_path)
-                            except Exception as e:
-                                print(f"Error generating image thumbnail: {e}")
-                                
-                        elif ext in vid_exts:
-                            # Try generating video thumbnail via ffmpeg
-                            try:
-                                # ffmpeg -i input -ss 0.1 -vframes 1 output
-                                # ss 0.1 to avoid possible black frame at start
+                        # Generar miniatura optimizada
+                        try:
+                            if ext in img_exts:
+                                with PILImage.open(orig_path) as img:
+                                    # Convertir a RGB si es necesario (para WebP)
+                                    if img.mode in ("RGBA", "P"):
+                                        img = img.convert("RGB")
+                                    # Reducir a 200x200 (suficiente para mosaico móvil)
+                                    img.thumbnail((200, 200)) 
+                                    img.save(thumb_path, "WEBP", quality=70)
+                            elif ext in vid_exts:
+                                # Capturar frame y guardar como WebP
+                                tmp_jpg = thumb_path.with_suffix(".tmp.jpg")
                                 cmd = [
                                     "ffmpeg", "-y", "-i", str(orig_path),
                                     "-ss", "00:00:01", "-vframes", "1",
-                                    "-q:v", "2", str(thumb_path)
+                                    "-q:v", "4", str(tmp_jpg)
                                 ]
                                 subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-                                if thumb_path.exists():
-                                    return FileResponse(thumb_path)
-                            except Exception as e:
-                                print(f"Error generating video thumbnail: {e}")
+                                if tmp_jpg.exists():
+                                    with PILImage.open(tmp_jpg) as img:
+                                        img.thumbnail((200, 200))
+                                        img.save(thumb_path, "WEBP", quality=70)
+                                    tmp_jpg.unlink()
+
+                            if thumb_path.exists():
+                                # Ejecutar mantenimiento de caché
+                                maintain_cache(CACHE_DIR)
+                                return FileResponse(thumb_path)
                                 
-    except Exception:
-        pass
-    
-    raise HTTPException(status_code=404, detail="Thumbnail not available")
+                        except Exception as e:
+                            print(f"Error generating thumbnail: {e}")
+                            
+        raise HTTPException(status_code=404, detail="Thumbnail not available")
+    except Exception as e:
+        print(f"Thumbnail error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     
 @app.get("/api/media/file/{path:path}")
 async def get_media_file(path: str, x_device_token: Optional[str] = Header(None), token: Optional[str] = Query(None)):
