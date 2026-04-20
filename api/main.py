@@ -157,11 +157,19 @@ async def get_items(x_device_token: str = Header(...)):
                             import hashlib
                             item["id"] = hashlib.md5(item.get("saved_path", "unknown").encode()).hexdigest()
 
+                        # Generate web_path relative to STORAGE or BASE
                         try:
-                            rel = saved_path.relative_to(BASE_DIR)
+                            # Try relative to storage first (most common)
+                            rel = saved_path.relative_to(SAFE_STORAGE_DIR)
                             item["web_path"] = str(rel).replace("\\", "/")
                         except ValueError:
-                            item["web_path"] = saved_path.name
+                            try:
+                                # Try relative to project root
+                                rel = saved_path.relative_to(BASE_DIR)
+                                item["web_path"] = str(rel).replace("\\", "/")
+                            except ValueError:
+                                # Fallback to filename
+                                item["web_path"] = saved_path.name
                         items.append(item)
                     except Exception:
                         continue
@@ -408,21 +416,45 @@ async def get_media_file(path: str, x_device_token: Optional[str] = Header(None)
     if not device:
         raise HTTPException(status_code=401, detail="Invalid token")
         
-    # Security: Normalize and verify path is inside BASE_DIR
+    # Security Check and Path Resolution
     try:
         requested_path = Path(path)
-        full_path = (BASE_DIR / requested_path).resolve()
+        # Try finding the file in SAFE_STORAGE_DIR first, then BASE_DIR
+        possible_paths = [
+            (SAFE_STORAGE_DIR / requested_path).resolve(),
+            (BASE_DIR / requested_path).resolve()
+        ]
         
-        # Ensure the file is inside the BASE_DIR to prevent directory traversal
-        full_path.relative_to(BASE_DIR)
+        target_file = None
+        for p in possible_paths:
+            # Security: Ensure resolved path is inside one of the allowed directories
+            is_inside_storage = False
+            try:
+                p.relative_to(SAFE_STORAGE_DIR)
+                is_inside_storage = True
+            except ValueError:
+                pass
+                
+            is_inside_base = False
+            try:
+                p.relative_to(BASE_DIR)
+                is_inside_base = True
+            except ValueError:
+                pass
+                
+            if (is_inside_storage or is_inside_base) and p.exists() and p.is_file():
+                target_file = p
+                break
         
-        if not full_path.exists() or not full_path.is_file():
-            raise HTTPException(status_code=404, detail="File not found")
+        if not target_file:
+            raise HTTPException(status_code=404, detail="File not found or access denied")
             
-        return FileResponse(full_path)
+        return FileResponse(target_file)
+    except HTTPException as he:
+        raise he
     except Exception as e:
         print(f"[MEDIA_ERROR] {e}")
-        raise HTTPException(status_code=403, detail="Access denied or file not found")
+        raise HTTPException(status_code=403, detail="Error accessing file")
 
 @app.post("/api/upload")
 async def upload_file(
