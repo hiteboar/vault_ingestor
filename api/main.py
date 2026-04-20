@@ -377,6 +377,31 @@ async def get_thumbnail(item_id: str):
         pass
     
     raise HTTPException(status_code=404, detail="Thumbnail not available")
+    
+@app.get("/api/media/file/{path:path}")
+async def get_media_file(path: str, x_device_token: str = Header(...)):
+    """Serves a media file with device token validation."""
+    device = auth.get_device_info(x_device_token)
+    if not device:
+        raise HTTPException(status_code=401, detail="Invalid token")
+        
+    # Security: Normalize and verify path is inside BASE_DIR
+    try:
+        # On Windows, path from URL might use / while disk uses \. 
+        # Path() handles / on Windows too.
+        requested_path = Path(path)
+        full_path = (BASE_DIR / requested_path).resolve()
+        
+        # Ensure the file is inside the BASE_DIR to prevent directory traversal
+        full_path.relative_to(BASE_DIR)
+        
+        if not full_path.exists() or not full_path.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+            
+        return FileResponse(full_path)
+    except Exception as e:
+        print(f"[MEDIA_ERROR] {e}")
+        raise HTTPException(status_code=403, detail="Access denied or file not found")
 
 @app.post("/api/upload")
 async def upload_file(

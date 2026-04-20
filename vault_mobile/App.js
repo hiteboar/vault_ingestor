@@ -18,7 +18,6 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Video, ResizeMode } from 'expo-av';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
-import { ActivityIndicator } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import * as api from './api';
@@ -263,13 +262,15 @@ export default function App() {
   };
 
   const openPreview = async (item) => {
-    setPreviewSrc(null); // Reset
     setPreviewItem(item);
+    setPreviewSrc(null);
+    setPreviewLoading(true);
+    setPreviewError(null);
     try {
         const src = await api.getMediaUrl(item);
         setPreviewSrc(src);
     } catch (e) {
-        Alert.alert("Error", "No se pudo obtener la URL del archivo");
+        setPreviewError("No se pudo obtener la URL del archivo");
     }
   };
 
@@ -519,8 +520,8 @@ export default function App() {
       )}
 
       {/* Preview Modal */}
-      {previewItem && previewSrc && (
-          <Modal visible={true} transparent={true} animationType="fade">
+      {previewItem && (
+          <Modal visible={true} transparent={true} animationType="fade" onRequestClose={() => setPreviewItem(null)}>
               <View style={styles.modalBg}>
                   <TouchableOpacity style={styles.modalClose} onPress={() => setPreviewItem(null)}>
                       <Text style={styles.modalCloseText}>Cerrar</Text>
@@ -528,6 +529,22 @@ export default function App() {
                   
                   {/* File Preview Logic */}
                   {(() => {
+                      if (previewLoading && !previewSrc && !previewError) {
+                          return <ActivityIndicator size="large" color="#3b82f6" />;
+                      }
+
+                      if (previewError) {
+                          return (
+                              <View style={styles.unsupportedCard}>
+                                  <Text style={styles.unsupportedIcon}>⚠️</Text>
+                                  <Text style={styles.unsupportedText}>{previewError}</Text>
+                                  <TouchableOpacity style={[styles.button, {marginTop: 20}]} onPress={() => openPreview(previewItem)}>
+                                      <Text style={styles.buttonText}>Reintentar</Text>
+                                  </TouchableOpacity>
+                              </View>
+                          );
+                      }
+
                       const name = previewItem?.name || 'archivo';
                       const ext = name.split('.').pop().toLowerCase();
                       const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
@@ -536,28 +553,47 @@ export default function App() {
                       if (isImage) {
                           return (
                               <View style={styles.modalImageContainer}>
-                                  <Image 
-                                      source={previewSrc} 
-                                      style={styles.modalImage} 
-                                      resizeMode="contain" 
-                                      onLoadStart={() => setPreviewLoading(true)}
-                                      onLoadEnd={() => setPreviewLoading(false)}
-                                  />
+                                  {previewSrc && (
+                                      <Image 
+                                          source={previewSrc} 
+                                          style={styles.modalImage} 
+                                          resizeMode="contain" 
+                                          onLoadStart={() => setPreviewLoading(true)}
+                                          onLoadEnd={() => setPreviewLoading(false)}
+                                          onError={() => {
+                                              setPreviewLoading(false);
+                                              setPreviewError("Error al cargar la imagen");
+                                          }}
+                                      />
+                                  )}
                                   {previewLoading && <ActivityIndicator size="large" color="#3b82f6" style={styles.spinner} />}
                               </View>
                           );
                       } else if (isVideo) {
                           return (
-                              <Video
-                                  source={previewSrc}
-                                  rate={1.0}
-                                  volume={1.0}
-                                  isMuted={false}
-                                  resizeMode={ResizeMode.CONTAIN}
-                                  shouldPlay
-                                  useNativeControls
-                                  style={styles.modalImage}
-                              />
+                              <View style={styles.modalImageContainer}>
+                                  {previewSrc ? (
+                                      <Video
+                                          source={previewSrc}
+                                          rate={1.0}
+                                          volume={1.0}
+                                          isMuted={false}
+                                          resizeMode={ResizeMode.CONTAIN}
+                                          shouldPlay
+                                          useNativeControls
+                                          style={styles.modalImage}
+                                          onLoadStart={() => setPreviewLoading(true)}
+                                          onLoad={() => setPreviewLoading(false)}
+                                          onError={(e) => {
+                                              setPreviewLoading(false);
+                                              setPreviewError("Error al cargar el video");
+                                          }}
+                                      />
+                                  ) : (
+                                       <ActivityIndicator size="large" color="#3b82f6" />
+                                  )}
+                                  {previewLoading && <ActivityIndicator size="large" color="#3b82f6" style={styles.spinner} />}
+                              </View>
                           );
                       } else {
                           return (
@@ -571,7 +607,11 @@ export default function App() {
                   })()}
 
                   <View style={styles.modalActionsRow}>
-                      <TouchableOpacity style={styles.modalSmallBtn} onPress={handleDownload}>
+                      <TouchableOpacity 
+                        style={[styles.modalSmallBtn, (!previewSrc) && styles.buttonDisabled]} 
+                        onPress={handleDownload}
+                        disabled={!previewSrc}
+                      >
                           <Text style={styles.buttonText}>📤 Descargar</Text>
                       </TouchableOpacity>
                       {role === 'admin' && (
