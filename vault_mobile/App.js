@@ -478,6 +478,12 @@ export default function App() {
             contentContainerStyle={styles.gallery}
             renderItem={renderThumbnail}
             ListEmptyComponent={<Text style={{color:'#64748b', textAlign:'center', marginTop: 50}}>No hay archivos en esta carpeta</Text>}
+            // OPTIMIZACIONES DE RENDIMIENTO
+            windowSize={7} // Renderiza 3 pantallas arriba/abajo del viewport
+            maxToRenderPerBatch={10} // Controla cuántos items se renderizan por lote
+            updateCellsBatchingPeriod={50} // Tiempo entre lotes en ms
+            initialNumToRender={12} // Renderiza 4 filas inmediatamente al inicio
+            removeClippedSubviews={true} // Mejora memoria en Android al ocultar vistas fuera de pantalla
             />
 
             {/* Subida Flotante */}

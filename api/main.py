@@ -1,5 +1,6 @@
 import json
 import os
+import asyncio
 import shutil
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -109,10 +110,69 @@ def log_audit(action: str, path: Path, device_info: dict):
     except Exception as e:
         print(f"[AUDIT_ERROR] {e}")
 
+class MetadataManager:
+    def __init__(self):
+        self._cache = {}
+        
+    def load(self):
+        """Carga el log de metadatos en RAM para búsquedas instantáneas."""
+        if not META_LOG.exists():
+            return
+        new_cache = {}
+        try:
+            with open(META_LOG, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        item = json.loads(line)
+                        if "id" in item and "saved_path" in item:
+                            new_cache[item["id"]] = item["saved_path"]
+            self._cache = new_cache
+            print(f"[META] Caché cargada: {len(self._cache)} archivos indexados en RAM.")
+        except Exception as e:
+            print(f"[META_ERROR] Error cargando metadatos: {e}")
+            
+    def get_path(self, item_id: str) -> Optional[str]:
+        return self._cache.get(item_id)
+        
+    def update(self, item: dict):
+        self._cache[item["id"]] = item["saved_path"]
+        
+    def remove(self, item_id: str):
+        if item_id in self._cache:
+            del self._cache[item_id]
+
+metadata_cache = MetadataManager()
+thumb_semaphore = asyncio.Semaphore(3)  # Límite de 3 generaciones simultáneas
+
+async def pre_generate_thumbnails_worker():
+    """Worker de fondo que busca archivos sin miniatura y los genera sín prisas."""
+    print("[WORKER] Iniciando pre-generación de miniaturas...")
+    # Obtenemos snapshot de los IDs actuales
+    ids = list(metadata_cache._cache.keys())
+    for item_id in ids:
+        thumb_path = CACHE_DIR / f"{item_id}.webp"
+        if not thumb_path.exists():
+            try:
+                # Simulamos una petición interna para aprovechar la lógica de generación con semáforo
+                # Pero lo hacemos de forma que no bloquee aplicaciones críticas
+                await asyncio.sleep(0.5) # Pausa entre generaciones para no ahogar la Pi
+                # Llamamos a una función interna de generación (refactorizamos get_thumbnail después si es necesario)
+                # Por ahora, simplemente dejamos que ocurra bajo demanda o implementamos aquí
+                pass 
+            except:
+                continue
+    print("[WORKER] Pre-generación completada.")
+
 cloudflare_tunnel = None
 
 @app.on_event("startup")
 async def startup_event():
+    # Iniciar caché de metadatos
+    metadata_cache.load()
+    
+    # Lanzar worker de pre-generación en segundo plano (sin esperar)
+    # asyncio.create_task(pre_generate_thumbnails_worker())
+    
     if os.getenv("ENABLE_REMOTE_ACCESS", "false").lower() == "true":
         import threading
         def _start_tunnel():
@@ -370,68 +430,63 @@ async def get_pairing_qr():
 async def get_thumbnail(item_id: str, background_tasks: BackgroundTasks):
     """Returns a cached or generated thumbnail for an image (optimized WebP)."""
     try:
-        if not META_LOG.exists():
-            return Response(status_code=404)
+        # 1. Búsqueda instantánea en RAM
+        saved_path_str = metadata_cache.get_path(item_id)
+        if not saved_path_str:
+            # Fallback a disco solo si no está en RAM por si acaso
+            if not META_LOG.exists(): return Response(status_code=404)
+            # (No implementamos fallback lento aquí para favorecer velocidad)
+            raise HTTPException(status_code=404, detail="Item not in cache")
             
-        with open(META_LOG, "r", encoding="utf-8") as f:
-            for line in f:
-                if item_id in line:
-                    item = json.loads(line)
-                    if item.get("id") == item_id:
-                        orig_path = Path(item["saved_path"])
-                        if not orig_path.exists():
-                            break
-                        
-                        # Usamos .webp para mayor ahorro de espacio
-                        thumb_path = CACHE_DIR / f"{item_id}.webp"
-                        
-                        # Probabilidad de 2% de revisar la caché para no saturar el disco en cada petición
-                        import random
-                        if random.random() < 0.02:
-                            background_tasks.add_task(maintain_cache, CACHE_DIR)
+        orig_path = Path(saved_path_str)
+        if not orig_path.exists():
+            raise HTTPException(status_code=404, detail="Original file missing")
+        
+        # 2. Verificar si ya existe en disco
+        thumb_path = CACHE_DIR / f"{item_id}.webp"
+        if thumb_path.exists():
+            return FileResponse(thumb_path)
+            
+        # 3. Probabilidad de mantenimiento
+        import random
+        if random.random() < 0.02:
+            background_tasks.add_task(maintain_cache, CACHE_DIR)
 
-                        if thumb_path.exists():
-                            return FileResponse(thumb_path)
-                        
-                        import subprocess
-                        
-                        # Tipos de archivos compatibles
-                        img_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
-                        vid_exts = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
-                        ext = orig_path.suffix.lower()
-                        
-                        # Generar miniatura optimizada
-                        try:
-                            if ext in img_exts:
-                                with PILImage.open(orig_path) as img:
-                                    # Convertir a RGB si es necesario (para WebP)
-                                    if img.mode in ("RGBA", "P"):
-                                        img = img.convert("RGB")
-                                    # Reducir a 200x200 (suficiente para mosaico móvil)
-                                    img.thumbnail((200, 200)) 
-                                    img.save(thumb_path, "WEBP", quality=70)
-                            elif ext in vid_exts:
-                                # Capturar frame y guardar como WebP
-                                tmp_jpg = thumb_path.with_suffix(".tmp.jpg")
-                                cmd = [
-                                    "ffmpeg", "-y", "-i", str(orig_path),
-                                    "-ss", "00:00:01", "-vframes", "1",
-                                    "-q:v", "4", str(tmp_jpg)
-                                ]
-                                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-                                if tmp_jpg.exists():
-                                    with PILImage.open(tmp_jpg) as img:
-                                        img.thumbnail((200, 200))
-                                        img.save(thumb_path, "WEBP", quality=70)
-                                    tmp_jpg.unlink()
+        # 4. Generación con Semáforo (Control de CPU)
+        async with thumb_semaphore:
+            # Re-verificar tras la espera por si otro hilo la generó
+            if thumb_path.exists():
+                return FileResponse(thumb_path)
+                
+            import subprocess
+            img_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+            vid_exts = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+            ext = orig_path.suffix.lower()
+            
+            try:
+                if ext in img_exts:
+                    with PILImage.open(orig_path) as img:
+                        if img.mode in ("RGBA", "P"): img = img.convert("RGB")
+                        img.thumbnail((200, 200)) 
+                        img.save(thumb_path, "WEBP", quality=70)
+                elif ext in vid_exts:
+                    tmp_jpg = thumb_path.with_suffix(".tmp.jpg")
+                    cmd = ["ffmpeg", "-y", "-i", str(orig_path), "-ss", "00:00:01", "-vframes", "1", "-q:v", "4", str(tmp_jpg)]
+                    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                    if tmp_jpg.exists():
+                        with PILImage.open(tmp_jpg) as img:
+                            img.thumbnail((200, 200))
+                            img.save(thumb_path, "WEBP", quality=70)
+                        tmp_jpg.unlink()
 
-                            if thumb_path.exists():
-                                return FileResponse(thumb_path)
-                                
-                        except Exception as e:
-                            print(f"Error generating thumbnail: {e}")
+                if thumb_path.exists():
+                    return FileResponse(thumb_path)
+            except Exception as e:
+                print(f"Error generating thumbnail for {item_id}: {e}")
                             
-        raise HTTPException(status_code=404, detail="Thumbnail not available")
+        raise HTTPException(status_code=404, detail="Thumbnail could not be generated")
+    except HTTPException as he:
+        raise he
     except Exception as e:
         print(f"Thumbnail error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -541,6 +596,9 @@ async def upload_file(
         with open(META_LOG, "a", encoding="utf-8") as f:
             f.write(json.dumps(item) + "\n")
             
+        # Sincronizar Cache en RAM
+        metadata_cache.update(item)
+            
         # Log Audit
         log_audit("UPLOAD", file_path, device)
             
@@ -589,6 +647,9 @@ async def delete_item(item_id: str, x_device_token: str = Header(...)):
         with open(META_LOG, "w", encoding="utf-8") as f:
             f.writelines(remaining_items)
 
+        # 4. Sincronizar Cache en RAM
+        metadata_cache.remove(item_id)
+
         # Log Audit
         log_audit("DELETE_ITEM", Path(target_item["saved_path"]), device)
 
@@ -630,6 +691,9 @@ async def delete_folder(folder_name: str, x_device_token: str = Header(...)):
                             
             with open(META_LOG, "w", encoding="utf-8") as f:
                 f.writelines(remaining_items)
+                
+            # 3. Recargar Cache en RAM completa tras borrar carpeta
+            metadata_cache.load()
                 
         # Log Audit
         log_audit("DELETE_FOLDER", folder_path, device)
