@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 import psutil
-from fastapi import FastAPI, HTTPException, Body, Header, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, Body, Header, UploadFile, File, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -398,16 +398,18 @@ async def get_thumbnail(item_id: str):
     raise HTTPException(status_code=404, detail="Thumbnail not available")
     
 @app.get("/api/media/file/{path:path}")
-async def get_media_file(path: str, x_device_token: str = Header(...)):
-    """Serves a media file with device token validation."""
-    device = auth.get_device_info(x_device_token)
+async def get_media_file(path: str, x_device_token: Optional[str] = Header(None), token: Optional[str] = Query(None)):
+    """Serves a media file with device token validation (via header or query para)."""
+    auth_token = x_device_token or token
+    if not auth_token:
+        raise HTTPException(status_code=401, detail="Token not provided")
+        
+    device = auth.get_device_info(auth_token)
     if not device:
         raise HTTPException(status_code=401, detail="Invalid token")
         
     # Security: Normalize and verify path is inside BASE_DIR
     try:
-        # On Windows, path from URL might use / while disk uses \. 
-        # Path() handles / on Windows too.
         requested_path = Path(path)
         full_path = (BASE_DIR / requested_path).resolve()
         

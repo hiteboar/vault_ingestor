@@ -63,7 +63,8 @@ export const fetchItems = async () => {
 export const getMediaUrl = async (item) => {
     const { url, token } = await getConnection();
     const encodedPath = item.web_path.split('/').map(segment => encodeURIComponent(segment)).join('/');
-    return { uri: `${url}/api/media/file/${encodedPath}`, headers: { 'X-Device-Token': token } };
+    // We add the token as a query parameter because some mobile Image components ignore headers
+    return { uri: `${url}/api/media/file/${encodedPath}?token=${token}`, headers: { 'X-Device-Token': token } };
 };
 
 export const getThumbUrl = async (item) => {
