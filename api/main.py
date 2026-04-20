@@ -33,14 +33,33 @@ from dotenv import load_dotenv, set_key
 load_dotenv()
 
 STORAGE_DIR = Path(os.getenv("STORAGE_DIR", str(BASE_DIR / "vault_storage"))).resolve()
-META_LOG = Path(os.getenv("META_LOG", str(STORAGE_DIR / "metadata.jsonl"))).resolve()
-CACHE_DIR = STORAGE_DIR / ".cache" / "thumbnails"
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
-AUDIT_LOG = STORAGE_DIR / "audit.log"
+
+def get_robust_path(target_path: Path, fallback_subdir: str) -> Path:
+    """Asegura que el directorio sea escribible, de lo contrario devuelve un fallback local."""
+    try:
+        target_path.mkdir(parents=True, exist_ok=True)
+        # Test de escritura
+        test_file = target_path / ".init_test"
+        test_file.touch()
+        test_file.unlink()
+        return target_path
+    except Exception as e:
+        fallback = BASE_DIR / "vault_internal" / fallback_subdir
+        print(f"\n[!] ERROR DE PERMISOS en: {target_path}")
+        print(f"    Usando fallback local: {fallback}")
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+# Aplicar lógica robusta a directorios críticos
+SAFE_STORAGE_DIR = get_robust_path(STORAGE_DIR, "storage")
+META_LOG = Path(os.getenv("META_LOG", str(SAFE_STORAGE_DIR / "metadata.jsonl"))).resolve()
+CACHE_DIR = get_robust_path(STORAGE_DIR / ".cache" / "thumbnails", "thumbnails")
+AUDIT_LOG = SAFE_STORAGE_DIR / "audit.log"
 ENV_PATH = BASE_DIR / ".env"
 
-# Initialize Auth
-auth = AuthManager(STORAGE_DIR / ".vault")
+# Initialize Auth (ahora usa STORAGE_DIR original pero AuthManager debe ser robusto internamente)
+# No obstante, pasamos un path seguro para evitar el crash inicial
+auth = AuthManager(get_robust_path(STORAGE_DIR / ".vault", "vault_auth"))
 
 async def verify_device(x_device_token: Optional[str] = Header(None)):
     """Simple security check for linked devices."""

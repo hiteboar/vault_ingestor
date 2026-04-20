@@ -13,7 +13,10 @@ class AuthManager:
         self.state_file = state_dir / "linked_devices.json"
         self.pin_file = state_dir / "pending_pins.json"
         self.state_dir = state_dir
-        self.state_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self.state_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            print(f"[AUTH_ERROR] No se pudo crear directorio de estado: {e}")
         
         # Load linked devices: {token: {device_info, linked_at}}
         self.linked_devices = self._load(self.state_file)
