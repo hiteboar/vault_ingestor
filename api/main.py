@@ -432,19 +432,28 @@ async def get_pairing_qr():
 # --- MEDIA & UPLOAD ---
 
 @app.get("/api/media/thumbnail/{item_id}")
-async def get_thumbnail(item_id: str, background_tasks: BackgroundTasks):
+async def get_thumbnail(
+    item_id: str, 
+    background_tasks: BackgroundTasks,
+    x_device_token: Optional[str] = Header(None), 
+    token: Optional[str] = Query(None)
+):
     """Returns a cached or generated thumbnail for an image (optimized WebP)."""
     try:
+        # Validación de seguridad (opcional para miniaturas, pero recomendada)
+        auth_token = x_device_token or token
+        if auth_token:
+            auth.get_device_info(auth_token) # Validamos que el dispositivo existe
+            
         # 1. Búsqueda instantánea en RAM
         saved_path_str = metadata_cache.get_path(item_id)
         if not saved_path_str:
-            # Fallback a disco solo si no está en RAM por si acaso
-            if not META_LOG.exists(): return Response(status_code=404)
-            # (No implementamos fallback lento aquí para favorecer velocidad)
+            print(f"[THUMB_DEBUG] ID no encontrado en caché RAM: {item_id}")
             raise HTTPException(status_code=404, detail="Item not in cache")
             
         orig_path = Path(saved_path_str)
         if not orig_path.exists():
+            print(f"[THUMB_DEBUG] El archivo original ya no existe: {saved_path_str}")
             raise HTTPException(status_code=404, detail="Original file missing")
         
         # 2. Verificar si ya existe en disco
@@ -452,6 +461,8 @@ async def get_thumbnail(item_id: str, background_tasks: BackgroundTasks):
         if thumb_path.exists():
             return FileResponse(thumb_path)
             
+        print(f"[THUMB_DEBUG] Generando nueva miniatura para: {item_id}")
+        
         # 3. Probabilidad de mantenimiento
         import random
         if random.random() < 0.02:
@@ -486,8 +497,10 @@ async def get_thumbnail(item_id: str, background_tasks: BackgroundTasks):
 
                 if thumb_path.exists():
                     return FileResponse(thumb_path)
-            except Exception as e:
-                print(f"Error generating thumbnail for {item_id}: {e}")
+            except Exception as gen_err:
+                print(f"[THUMB_GEN_ERROR] Fallo crítico generando miniatura para {item_id}: {gen_err}")
+                # Si falla WebP, podemos intentar un fallback a JPG en el futuro, 
+                # pero por ahora identifiquemos el error.
                             
         raise HTTPException(status_code=404, detail="Thumbnail could not be generated")
     except HTTPException as he:

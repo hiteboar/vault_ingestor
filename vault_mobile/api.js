@@ -69,7 +69,7 @@ export const getMediaUrl = async (item) => {
 
 export const getThumbUrl = async (item) => {
     const { url, token } = await getConnection();
-    return { uri: `${url}/api/media/thumbnail/${item.id}`, headers: { 'X-Device-Token': token } };
+    return { uri: `${url}/api/media/thumbnail/${item.id}?token=${token}`, headers: { 'X-Device-Token': token } };
 };
 
 export const uploadFile = async (uri, name, mimeType, folder) => {
