@@ -25,15 +25,17 @@ def ensure_dirs():
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 def generate_thumb(item):
-    """Genera miniatura para un item si no existe."""
+    """Generate thumbnail for an item if it doesn't exist."""
     item_id = item.get("id")
     orig_path = Path(item.get("saved_path", ""))
     
     if not item_id or not orig_path.exists():
         return False
 
-    thumb_path = CACHE_DIR / f"{item_id}.jpg"
-    if thumb_path.exists():
+    thumb_path_webp = CACHE_DIR / f"{item_id}.webp"
+    thumb_path_jpg = CACHE_DIR / f"{item_id}.jpg"
+
+    if thumb_path_webp.exists() or thumb_path_jpg.exists():
         return False
 
     ext = orig_path.suffix.lower()
@@ -43,17 +45,32 @@ def generate_thumb(item):
     try:
         if ext in img_exts:
             with Image.open(orig_path) as img:
-                img.convert('RGB').thumbnail((400, 400))
-                img.save(thumb_path, "JPEG", quality=85)
+                if img.mode in ("RGBA", "P"): img = img.convert("RGB")
+                img.thumbnail((300, 300))
+                try:
+                    img.save(thumb_path_webp, "WEBP", quality=70)
+                except Exception:
+                    img.save(thumb_path_jpg, "JPEG", quality=75)
             return True
         elif ext in vid_exts:
+            # First try generating a temp JPG to then convert or keep
+            tmp_jpg = CACHE_DIR / f"{item_id}.tmp.jpg"
             cmd = [
                 "ffmpeg", "-y", "-i", str(orig_path),
                 "-ss", "00:00:01", "-vframes", "1",
-                "-q:v", "2", str(thumb_path)
+                "-q:v", "4", str(tmp_jpg)
             ]
             subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-            return thumb_path.exists()
+            if tmp_jpg.exists():
+                with Image.open(tmp_jpg) as img:
+                    img.thumbnail((300, 300))
+                    try:
+                        img.save(thumb_path_webp, "WEBP", quality=70)
+                        tmp_jpg.unlink()
+                    except Exception:
+                        img.save(thumb_path_jpg, "JPEG", quality=75)
+                        tmp_jpg.unlink()
+                return True
     except Exception:
         pass
     return False

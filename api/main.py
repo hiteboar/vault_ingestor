@@ -66,7 +66,12 @@ auth = AuthManager(get_robust_path(STORAGE_DIR / ".vault", "vault_auth"))
 def maintain_cache(cache_dir: Path, max_size_mb: int = 500):
     """Elimina las miniaturas más antiguas si se supera el límite de espacio."""
     try:
-        files = sorted(cache_dir.glob("*.webp"), key=lambda x: x.stat().st_mtime)
+        # Buscar todos los formatos soportados
+        files = []
+        for ext in ["*.webp", "*.jpg", "*.jpeg"]:
+            files.extend(cache_dir.glob(ext))
+        
+        files.sort(key=lambda x: x.stat().st_mtime)
         total_size = sum(f.stat().st_size for f in files)
         
         if total_size > max_size_mb * 1024 * 1024:
@@ -456,10 +461,14 @@ async def get_thumbnail(
             print(f"[THUMB_DEBUG] El archivo original ya no existe: {saved_path_str}")
             raise HTTPException(status_code=404, detail="Original file missing")
         
-        # 2. Verificar si ya existe en disco
-        thumb_path = CACHE_DIR / f"{item_id}.webp"
-        if thumb_path.exists():
-            return FileResponse(thumb_path)
+        # 2. Verificar si ya existe en disco (buscando múltiples extensiones)
+        thumb_path_webp = CACHE_DIR / f"{item_id}.webp"
+        thumb_path_jpg = CACHE_DIR / f"{item_id}.jpg"
+        
+        if thumb_path_webp.exists():
+            return FileResponse(thumb_path_webp)
+        if thumb_path_jpg.exists():
+            return FileResponse(thumb_path_jpg)
             
         print(f"[THUMB_DEBUG] Generando nueva miniatura para: {item_id}")
         
@@ -471,8 +480,8 @@ async def get_thumbnail(
         # 4. Generación con Semáforo (Control de CPU)
         async with thumb_semaphore:
             # Re-verificar tras la espera por si otro hilo la generó
-            if thumb_path.exists():
-                return FileResponse(thumb_path)
+            if thumb_path_webp.exists(): return FileResponse(thumb_path_webp)
+            if thumb_path_jpg.exists(): return FileResponse(thumb_path_jpg)
                 
             import subprocess
             img_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
@@ -483,24 +492,32 @@ async def get_thumbnail(
                 if ext in img_exts:
                     with PILImage.open(orig_path) as img:
                         if img.mode in ("RGBA", "P"): img = img.convert("RGB")
-                        img.thumbnail((200, 200)) 
-                        img.save(thumb_path, "WEBP", quality=70)
+                        img.thumbnail((300, 300)) 
+                        try:
+                            img.save(thumb_path_webp, "WEBP", quality=70)
+                            return FileResponse(thumb_path_webp)
+                        except Exception:
+                            # Fallback a JPEG si falla WEBP (falta de encoder en el sistema)
+                            img.save(thumb_path_jpg, "JPEG", quality=75)
+                            return FileResponse(thumb_path_jpg)
+                            
                 elif ext in vid_exts:
-                    tmp_jpg = thumb_path.with_suffix(".tmp.jpg")
+                    tmp_jpg = CACHE_DIR / f"{item_id}.tmp.jpg"
                     cmd = ["ffmpeg", "-y", "-i", str(orig_path), "-ss", "00:00:01", "-vframes", "1", "-q:v", "4", str(tmp_jpg)]
                     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
                     if tmp_jpg.exists():
                         with PILImage.open(tmp_jpg) as img:
-                            img.thumbnail((200, 200))
-                            img.save(thumb_path, "WEBP", quality=70)
-                        tmp_jpg.unlink()
-
-                if thumb_path.exists():
-                    return FileResponse(thumb_path)
+                            img.thumbnail((300, 300))
+                            try:
+                                img.save(thumb_path_webp, "WEBP", quality=70)
+                                tmp_jpg.unlink()
+                                return FileResponse(thumb_path_webp)
+                            except Exception:
+                                img.save(thumb_path_jpg, "JPEG", quality=75)
+                                tmp_jpg.unlink()
+                                return FileResponse(thumb_path_jpg)
             except Exception as gen_err:
                 print(f"[THUMB_GEN_ERROR] Fallo crítico generando miniatura para {item_id}: {gen_err}")
-                # Si falla WebP, podemos intentar un fallback a JPG en el futuro, 
-                # pero por ahora identifiquemos el error.
                             
         raise HTTPException(status_code=404, detail="Thumbnail could not be generated")
     except HTTPException as he:
@@ -656,10 +673,11 @@ async def delete_item(item_id: str, x_device_token: str = Header(...)):
         if p.exists():
             p.unlink()
             
-        # 2. Delete thumbnail if exists
-        thumb_path = CACHE_DIR / f"{item_id}.jpg"
-        if thumb_path.exists():
-            thumb_path.unlink()
+        # 2. Delete thumbnails if they exist
+        for ext in [".webp", ".jpg", ".jpeg"]:
+            tp = CACHE_DIR / f"{item_id}{ext}"
+            if tp.exists():
+                tp.unlink()
 
         # 3. Rewrite metadata log
         with open(META_LOG, "w", encoding="utf-8") as f:
