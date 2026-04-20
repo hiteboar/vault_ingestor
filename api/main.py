@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 import psutil
-from fastapi import FastAPI, HTTPException, Body, Header, UploadFile, File, Form, Query
+from fastapi import FastAPI, HTTPException, Body, Header, UploadFile, File, Form, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -367,7 +367,7 @@ async def get_pairing_qr():
 # --- MEDIA & UPLOAD ---
 
 @app.get("/api/media/thumbnail/{item_id}")
-async def get_thumbnail(item_id: str):
+async def get_thumbnail(item_id: str, background_tasks: BackgroundTasks):
     """Returns a cached or generated thumbnail for an image (optimized WebP)."""
     try:
         if not META_LOG.exists():
@@ -384,6 +384,12 @@ async def get_thumbnail(item_id: str):
                         
                         # Usamos .webp para mayor ahorro de espacio
                         thumb_path = CACHE_DIR / f"{item_id}.webp"
+                        
+                        # Probabilidad de 2% de revisar la caché para no saturar el disco en cada petición
+                        import random
+                        if random.random() < 0.02:
+                            background_tasks.add_task(maintain_cache, CACHE_DIR)
+
                         if thumb_path.exists():
                             return FileResponse(thumb_path)
                         
@@ -420,8 +426,6 @@ async def get_thumbnail(item_id: str):
                                     tmp_jpg.unlink()
 
                             if thumb_path.exists():
-                                # Ejecutar mantenimiento de caché
-                                maintain_cache(CACHE_DIR)
                                 return FileResponse(thumb_path)
                                 
                         except Exception as e:
