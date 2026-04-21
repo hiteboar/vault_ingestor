@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import io
-from PIL import Image as PILImage
+from PIL import Image as PILImage, ImageOps
 
 from core.auth import AuthManager
 from core.network import get_local_ip
@@ -491,6 +491,7 @@ async def get_thumbnail(
             try:
                 if ext in img_exts:
                     with PILImage.open(orig_path) as img:
+                        img = ImageOps.exif_transpose(img)
                         if img.mode in ("RGBA", "P"): img = img.convert("RGB")
                         img.thumbnail((300, 300)) 
                         try:
@@ -507,6 +508,7 @@ async def get_thumbnail(
                     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
                     if tmp_jpg.exists():
                         with PILImage.open(tmp_jpg) as img:
+                            img = ImageOps.exif_transpose(img)
                             img.thumbnail((300, 300))
                             try:
                                 img.save(thumb_path_webp, "WEBP", quality=70)

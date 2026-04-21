@@ -3,7 +3,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageOps
 import hashlib
 import time
 from datetime import datetime
@@ -45,6 +45,7 @@ def generate_thumb(item):
     try:
         if ext in img_exts:
             with Image.open(orig_path) as img:
+                img = ImageOps.exif_transpose(img)
                 if img.mode in ("RGBA", "P"): img = img.convert("RGB")
                 img.thumbnail((300, 300))
                 try:
@@ -63,6 +64,7 @@ def generate_thumb(item):
             subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
             if tmp_jpg.exists():
                 with Image.open(tmp_jpg) as img:
+                    img = ImageOps.exif_transpose(img)
                     img.thumbnail((300, 300))
                     try:
                         img.save(thumb_path_webp, "WEBP", quality=70)
@@ -205,6 +207,20 @@ def run_cleanup(dry_run=True):
 
     print(f"📊 Resumen: {missing_files} registros muertos, {orphans} archivos huérfanos.")
 
+def run_clear_cache():
+    """Elimina todas las miniaturas cacheadas."""
+    print(f"[CLEANUP] Limpiando caché de miniaturas en {CACHE_DIR}...")
+    count = 0
+    if CACHE_DIR.exists():
+        for f in CACHE_DIR.glob("*"):
+            if f.is_file() and f.suffix.lower() in [".webp", ".jpg", ".jpeg"]:
+                try:
+                    f.unlink()
+                    count += 1
+                except Exception as e:
+                    print(f"  [!] Error eliminando {f.name}: {e}")
+    print(f"[OK] Caché limpia: {count} archivos eliminados.")
+
 if __name__ == "__main__":
     import sys
     ensure_dirs()
@@ -215,9 +231,12 @@ if __name__ == "__main__":
         run_cleanup(dry_run=not force)
     elif "--thumbnails" in sys.argv:
         run_thumbnails()
+    elif "--clear-cache" in sys.argv:
+        run_clear_cache()
     else:
         print("Vault Maintenance Tool")
         print("  --scan            Escanea disco y registra todo (Recomendado)")
         print("  --thumbnails      Solo genera miniaturas de lo ya registrado")
+        print("  --clear-cache     Borra todas las miniaturas generadas")
         print("  --cleanup         Busca archivos huérfanos")
         print("  --cleanup --force Ejecuta la limpieza")
