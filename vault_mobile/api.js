@@ -39,10 +39,10 @@ export const getMe = async () => {
     return resp.data;
 };
 
-export const createInvite = async (folder) => {
+export const createInvite = async (folders) => {
     const client = await getClient();
     if (!client) throw new Error('Not connected');
-    const resp = await client.post('/api/auth/invite', { folder });
+    const resp = await client.post('/api/auth/invite', { folders });
     return resp.data;
 };
 

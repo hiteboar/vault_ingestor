@@ -284,7 +284,7 @@ async def get_system_status():
         total_size = 0
         if STORAGE_DIR.exists():
             for p in STORAGE_DIR.rglob("*"):
-                if p.is_file() and not "_tmp" in p.parts:
+                if p.is_file() and not any(part in p.parts for part in ["_tmp", ".cache"]):
                     file_count += 1
                     total_size += p.stat().st_size
 
@@ -369,7 +369,7 @@ async def request_pairing():
     }
 
 class InviteRequest(BaseModel):
-    folder: str
+    folders: List[str]
 
 @app.post("/api/auth/invite")
 async def create_invite(data: InviteRequest, x_device_token: str = Header(...)):
@@ -378,7 +378,7 @@ async def create_invite(data: InviteRequest, x_device_token: str = Header(...)):
     if not device or device.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Only admins can generate invites")
     
-    pin = auth.generate_pin(role="standard", allowed_folders=[data.folder])
+    pin = auth.generate_pin(role="standard", allowed_folders=data.folders)
     ip = get_local_ip()
     port = int(os.getenv("API_PORT", "8000"))
     public_url = os.getenv("PUBLIC_URL")

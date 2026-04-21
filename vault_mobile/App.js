@@ -21,8 +21,9 @@ import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import * as api from './api';
+import { AppState } from 'react-native';
 
-const { width } = Dimensions.get('window');
+const { width, height } = Dimensions.get('window');
 const COLUMN_COUNT = 3;
 const ITEM_WIDTH = width / COLUMN_COUNT - 10;
 
@@ -71,10 +72,30 @@ export default function App() {
   // Date filters for timeline
   const [selectedYear, setSelectedYear] = useState('All');
   const [selectedMonth, setSelectedMonth] = useState('All');
+  
+  // UI - Drawer & Refresh
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [inviteConfigModal, setInviteConfigModal] = useState(false);
+  const [selectedInviteFolders, setSelectedInviteFolders] = useState(['root']);
+  const [lastUpdated, setLastUpdated] = useState(new Date());
 
   useEffect(() => {
-    checkConnection();
-  }, []);
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (nextAppState === 'active') {
+        loadData();
+      }
+    });
+
+    // Refresh interval: 30s general, 1s in stats
+    const interval = setInterval(() => {
+        loadData(false); // Silent load
+    }, view === 'stats' ? 1000 : 30000);
+
+    return () => {
+      subscription.remove();
+      clearInterval(interval);
+    };
+  }, [connected, view]);
 
   const checkConnection = async () => {
     const conn = await api.getConnection();
@@ -86,12 +107,12 @@ export default function App() {
     }
   };
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async (showLoading = true) => {
+    if (showLoading) setLoading(true);
     try {
       const me = await api.getMe();
       setRole(me.role);
-      if (me.role !== 'admin' && me.allowed_folders.length > 0) {
+      if (me.role !== 'admin' && me.allowed_folders.length > 0 && currentFolder === 'root') {
           setCurrentFolder(me.allowed_folders[0]);
       }
 
@@ -100,7 +121,6 @@ export default function App() {
         api.fetchStatus()
       ]);
       
-      // Deduplicate items by ID (keep latest)
       const uniqueMap = new Map();
       itemsList.forEach(item => {
         uniqueMap.set(item.id, item);
@@ -108,17 +128,16 @@ export default function App() {
       
       setItems(Array.from(uniqueMap.values()));
       setStatus(sysStatus);
+      setLastUpdated(new Date());
       setError('');
     } catch (e) {
-      console.error(e);
-      // If unauthorized, reset
       if (e.response?.status === 401) {
         handleLogout();
       } else {
         setError('Error de conexión o token revocado.');
       }
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   };
 
@@ -235,16 +254,7 @@ export default function App() {
   };
 
   const handleUpload = async (type) => {
-    let result;
-    if (type === 'image') {
-      result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.All,
-        allowsEditing: false,
-        quality: 1,
-      });
-    } else {
-      result = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
-    }
+    result = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
 
     if (!result.canceled) {
       setUploading(true);
@@ -252,7 +262,6 @@ export default function App() {
           const asset = result.assets[0];
           const filename = asset.name || asset.fileName || asset.uri.split('/').pop() || 'upload.bin';
           await api.uploadFile(asset.uri, filename, asset.mimeType || 'application/octet-stream', currentFolder);
-          alert('¡Archivo subido correctamente!');
           loadData();
       } catch(e) {
           alert('Error al subir: ' + e.message);
@@ -288,13 +297,23 @@ export default function App() {
   const handleCreateInvite = async () => {
       try {
           setLoading(true);
-          const data = await api.createInvite(currentFolder);
+          const data = await api.createInvite(selectedInviteFolders);
           setInviteData(data);
           setInviteModal(true);
+          setInviteConfigModal(false);
+          setDrawerOpen(false);
       } catch (e) {
           alert('Error creando invitación: ' + e.message);
       } finally {
           setLoading(false);
+      }
+  };
+
+  const toggleInviteFolder = (folder) => {
+      if (selectedInviteFolders.includes(folder)) {
+          setSelectedInviteFolders(selectedInviteFolders.filter(f => f !== folder));
+      } else {
+          setSelectedInviteFolders([...selectedInviteFolders, folder]);
       }
   };
 
@@ -366,14 +385,24 @@ export default function App() {
       <StatusBar barStyle="light-content" />       
       {/* Header */}
       <View style={styles.header}>
-        <View>
-            <Text style={styles.headerTitle}>Vault ({role === 'admin' ? 'Admin' : 'Estándar'})</Text>
-            <Text style={styles.headerSub}>IP: {(url || '').replace('http://', '').split(':')[0] || '...'}</Text>
-
+        <View style={{flexDirection: 'row', alignItems: 'center'}}>
+            {view === 'stats' && (
+                <TouchableOpacity onPress={() => setView('gallery')} style={{marginRight:15}}>
+                    <Text style={{fontSize: 24, color: '#3b82f6'}}>←</Text>
+                </TouchableOpacity>
+            )}
+            <Text style={styles.headerTitle}>{view === 'stats' ? 'Panel de Control' : 'Vault Ingestor'}</Text>
         </View>
-        <TouchableOpacity onPress={loadData} disabled={loading}>
-           {loading ? <ActivityIndicator color="#3b82f6"/> : <Text style={styles.headerAction}>Actualizar</Text>}
-        </TouchableOpacity>
+        <View style={{flexDirection: 'row', alignItems:'center'}}>
+            <TouchableOpacity onPress={() => loadData(true)} disabled={loading} style={{marginRight: 20}}>
+                {loading ? <ActivityIndicator size="small" color="#3b82f6"/> : <Text style={{fontSize: 24}}>🔄</Text>}
+            </TouchableOpacity>
+            {!previewItem && (
+                <TouchableOpacity onPress={() => setDrawerOpen(true)}>
+                    <Text style={{fontSize: 28, color: '#fff'}}>☰</Text>
+                </TouchableOpacity>
+            )}
+        </View>
       </View>
 
       {/* Folder Selector & Management */}
@@ -437,26 +466,10 @@ export default function App() {
         </View>
       )}
 
-      {/* Tabs */}
-      <View style={styles.tabs}>
-        <TouchableOpacity style={[styles.tab, view === 'gallery' && styles.tabActive]} onPress={() => setView('gallery')}>
-          <Text style={[styles.tabText, view === 'gallery' && styles.tabTextActive]}>Archivos</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.tab, view === 'stats' && styles.tabActive]} onPress={() => setView('stats')}>
-          <Text style={[styles.tabText, view === 'stats' && styles.tabTextActive]}>Panel Control</Text>
-        </TouchableOpacity>
-      </View>
 
       {/* Main View */}
       {view === 'gallery' ? (
         <View style={{ flex: 1 }}>
-            {role === 'admin' && (
-                <View style={styles.adminBar}>
-                    <TouchableOpacity style={styles.inviteButtonFull} onPress={handleCreateInvite}>
-                        <Text style={styles.inviteText}>Generar Acceso P2P a "{currentFolder === 'root' ? 'Línea de Tiempo' : currentFolder}"</Text>
-                    </TouchableOpacity>
-                </View>
-            )}
 
             <FlatList 
             data={items.filter(i => {
@@ -491,36 +504,44 @@ export default function App() {
                 {uploading ? (
                     <View style={styles.fab}><ActivityIndicator color="#fff"/></View>
                 ) : (
-                    <>
-                    <TouchableOpacity style={[styles.fab, {marginBottom:10, backgroundColor: '#8b5cf6'}]} onPress={() => handleUpload('document')}>
-                        <Text style={styles.fabIcon}>📄</Text>
+                    <TouchableOpacity style={styles.fab} onPress={handleUpload}>
+                        <Text style={styles.fabIcon}>＋</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity style={styles.fab} onPress={() => handleUpload('image')}>
-                        <Text style={styles.fabIcon}>➕</Text>
-                    </TouchableOpacity>
-                    </>
                 )}
             </View>
         </View>
       ) : (
         <View style={styles.statsContainer}>
           <View style={styles.statCard}>
-             <Text style={styles.statLabel}>Espacio Libre en Disco</Text>
-             <Text style={styles.statValue}>{Math.round(100 - (status?.disk?.percent || 0))}%</Text>
+             <Text style={styles.statLabel}>Uso de Disco</Text>
+             <View style={styles.progressBarBg}>
+                <View style={[styles.progressBarFill, { width: `${status?.disk?.percent || 0}%`, backgroundColor: (status?.disk?.percent > 90 ? '#ef4444' : '#3b82f6') }]} />
+             </View>
+             <Text style={styles.statValue}>{Math.round(status?.disk?.percent || 0)}%</Text>
              <Text style={styles.statSub}>
-                {formatBytes(status?.disk?.used || 0)} / {formatBytes(status?.disk?.total || 1)} ocupados
+                {formatBytes(status?.disk?.used || 0)} utilizados de {formatBytes(status?.disk?.total || 1)}
              </Text>
           </View>
+
           <View style={styles.statCard}>
-             <Text style={styles.statLabel}>Memoria RAM</Text>
+             <Text style={styles.statLabel}>Uso de RAM</Text>
+             <View style={styles.progressBarBg}>
+                <View style={[styles.progressBarFill, { width: `${status?.ram?.percent || 0}%`, backgroundColor: (status?.ram?.percent > 85 ? '#f59e0b' : '#10b981') }]} />
+             </View>
              <Text style={styles.statValue}>{Math.round(status?.ram?.percent || 0)}%</Text>
+             <Text style={styles.statSub}>
+                {formatBytes(status?.ram?.used || 0)} / {formatBytes(status?.ram?.total || 1)}
+             </Text>
           </View>
+
           <View style={styles.statCard}>
-             <Text style={styles.statLabel}>Total Archivos</Text>
+             <Text style={styles.statLabel}>Archivos en Bóveda</Text>
              <Text style={styles.statValue}>{status?.vault?.file_count || 0}</Text>
+             <Text style={styles.statSub}>Total: {formatBytes(status?.vault?.total_size || 0)}</Text>
           </View>
+
           <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-             <Text style={styles.logoutText}>Desvincular Dispositivo y Salir</Text>
+             <Text style={styles.logoutText}>Cerrar Sesión y Desvincular</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -630,48 +651,112 @@ export default function App() {
           </Modal>
       )}
 
-      {/* New Folder Modal */}
-      {newFolderModal && (
-          <Modal visible={true} transparent={true} animationType="fade">
-              <View style={styles.modalBg}>
-                  <View style={styles.promptCard}>
-                      <Text style={styles.promptTitle}>Nueva Carpeta</Text>
-                      <TextInput 
-                        style={styles.input} 
-                        placeholder="Nombre de la carpeta" 
-                        placeholderTextColor="#64748b"
-                        value={newFolderName}
-                        onChangeText={setNewFolderName}
-                        autoFocus
-                      />
-                      <View style={{flexDirection:'row', gap: 10}}>
-                          <TouchableOpacity style={[styles.button, {flex:1, backgroundColor:'#334155'}]} onPress={() => setNewFolderModal(false)}>
-                              <Text style={styles.buttonText}>Cancelar</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity style={[styles.button, {flex:1}]} onPress={handleCreateFolder}>
-                              <Text style={styles.buttonText}>Crear</Text>
-                          </TouchableOpacity>
-                      </View>
-                  </View>
-              </View>
-          </Modal>
-      )}
+       {/* Side Menu Drawer */}
+       {drawerOpen && (
+           <Modal transparent={true} visible={true} animationType="none" onRequestClose={() => setDrawerOpen(false)}>
+               <View style={styles.drawerContainer}>
+                   <TouchableOpacity style={styles.drawerOverlay} onPress={() => setDrawerOpen(false)} />
+                   <View style={styles.drawerContent}>
+                       <View style={styles.drawerHeader}>
+                           <Text style={styles.drawerTitle}>Menú</Text>
+                           <TouchableOpacity onPress={() => setDrawerOpen(false)}>
+                               <Text style={{color:'#64748b', fontSize: 20}}>✕</Text>
+                           </TouchableOpacity>
+                       </View>
 
-      {/* Invite Modal */}
-      {inviteModal && inviteData && (
-           <Modal visible={true} transparent={true} animationType="slide">
-              <View style={styles.modalBg}>
-                   <View style={styles.qrCard}>
-                       <Text style={styles.qrTitle}>Invitación a {inviteData.folder}</Text>
-                       <Text style={styles.qrText}>Dile a un amigo que escanee este código o introduzca manualmente la URL y el PIN en su aplicación Vault Ingestor.</Text>
-                       <Text style={styles.qrPin}>PIN: {inviteData.pin}</Text>
-                       <TouchableOpacity style={{marginTop:30, padding: 15, backgroundColor:'#1e293b', borderRadius:8}} onPress={() => setInviteModal(false)}>
-                           <Text style={{color:'#fff', fontWeight:'bold'}}>Cerrar Invitación</Text>
+                       <View style={styles.drawerUserInfo}>
+                           <Text style={styles.drawerRoleLabel}>Usuario</Text>
+                           <Text style={styles.drawerRoleValue}>{role === 'admin' ? 'Administrador' : 'Estándar'}</Text>
+                       </View>
+
+                       <View style={styles.drawerDivider} />
+
+                       <TouchableOpacity 
+                           style={styles.drawerItem} 
+                           onPress={() => { setView('stats'); setDrawerOpen(false); }}
+                       >
+                           <Text style={styles.drawerItemIcon}>📊</Text>
+                           <Text style={styles.drawerItemText}>Panel de Control</Text>
                        </TouchableOpacity>
+
+                       {role === 'admin' && (
+                           <TouchableOpacity 
+                               style={styles.drawerItem} 
+                               onPress={() => setInviteConfigModal(true)}
+                           >
+                               <Text style={styles.drawerItemIcon}>👤</Text>
+                               <Text style={styles.drawerItemText}>Invitar Usuario</Text>
+                           </TouchableOpacity>
+                       )}
+
+                       <View style={{flex:1}} />
+                       
+                       <View style={styles.drawerFooter}>
+                           <Text style={styles.drawerFooterText}>Vault Ingestor v1.2</Text>
+                       </View>
                    </View>
-              </View>
+               </View>
            </Modal>
-      )}
+       )}
+
+       {/* Invite Configuration Modal */}
+       {inviteConfigModal && (
+           <Modal visible={true} transparent={true} animationType="fade">
+               <View style={styles.modalBg}>
+                   <View style={styles.promptCard}>
+                       <Text style={styles.promptTitle}>Configurar Invitación</Text>
+                       <Text style={styles.promptSub}>Selecciona las carpetas a las que tendrá acceso el invitado:</Text>
+                       
+                       <View style={{maxHeight: 300, marginVertical: 15}}>
+                           <FlatList 
+                               data={['root', ...new Set(items.map(i => i.context).filter(c => c && c !== 'root'))]}
+                               keyExtractor={f => f}
+                               renderItem={({item: f}) => (
+                                   <TouchableOpacity 
+                                       style={[styles.folderSelectItem, selectedInviteFolders.includes(f) && styles.folderSelectItemActive]}
+                                       onPress={() => toggleInviteFolder(f)}
+                                   >
+                                       <Text style={[styles.folderSelectItemText, selectedInviteFolders.includes(f) && styles.folderSelectItemTextActive]}>
+                                           {f === 'root' ? 'Línea de Tiempo (Todo)' : f}
+                                       </Text>
+                                       {selectedInviteFolders.includes(f) && <Text style={{color:'#fff'}}>✓</Text>}
+                                   </TouchableOpacity>
+                               )}
+                           />
+                       </View>
+
+                       <View style={{flexDirection:'row', gap: 10}}>
+                           <TouchableOpacity style={[styles.button, {flex:1, backgroundColor:'#334155'}]} onPress={() => setInviteConfigModal(false)}>
+                               <Text style={styles.buttonText}>Cancelar</Text>
+                           </TouchableOpacity>
+                           <TouchableOpacity 
+                               style={[styles.button, {flex:1}, selectedInviteFolders.length === 0 && styles.buttonDisabled]} 
+                               onPress={handleCreateInvite}
+                               disabled={selectedInviteFolders.length === 0}
+                           >
+                               <Text style={styles.buttonText}>Generar QR</Text>
+                           </TouchableOpacity>
+                       </View>
+                   </View>
+               </View>
+           </Modal>
+       )}
+
+       {/* Invite Modal (Result) */}
+       {inviteModal && inviteData && (
+            <Modal visible={true} transparent={true} animationType="slide">
+               <View style={styles.modalBg}>
+                    <View style={styles.qrCard}>
+                        <Text style={styles.qrTitle}>Invitación Lista</Text>
+                        <Text style={styles.qrText}>Dile a un amigo que escanee este código o introduzca manualmente la URL y el PIN en su aplicación Vault Ingestor.</Text>
+                        <Text style={styles.qrPin}>PIN: {inviteData.pin}</Text>
+                        <TouchableOpacity style={{marginTop:30, padding: 15, backgroundColor:'#1e293b', borderRadius:8}} onPress={() => setInviteModal(false)}>
+                            <Text style={{color:'#fff', fontWeight:'bold'}}>Cerrar</Text>
+                        </TouchableOpacity>
+                    </View>
+               </View>
+            </Modal>
+       )}
 
     </SafeAreaView>
   );
@@ -739,10 +824,8 @@ const styles = StyleSheet.create({
   buttonScan: { backgroundColor: '#10b981', borderRadius: 12, padding: 18, alignItems: 'center', marginBottom: 20 },
   buttonDisabled: { backgroundColor: '#475569' },
   errorText: { color: '#ef4444', marginBottom: 15, textAlign: 'center', fontWeight: 'bold' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: '#1e293b' },
-  headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#fff' },
-  headerSub: { fontSize: 12, color: '#64748b', marginTop: 2 },
-  headerAction: { color: '#3b82f6', fontWeight: 'bold' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingTop: 50, borderBottomWidth: 1, borderBottomColor: '#1e293b' },
+  headerTitle: { fontSize: 22, fontWeight: 'bold', color: '#fff' },
   folderSelectorContainer: { borderBottomWidth: 1, borderBottomColor: '#1e293b' },
   folderSelector: { flexDirection: 'row', alignItems: 'center', padding: 10 },
   addFolderBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#3b82f6', justifyContent: 'center', alignItems: 'center', marginLeft: 10 },
@@ -761,11 +844,6 @@ const styles = StyleSheet.create({
   folderPathText: { color: '#64748b', fontSize: 11 },
   deleteFolderBtn: { padding: 5 },
   deleteFolderText: { color: '#ef4444', fontSize: 11, fontWeight: 'bold' },
-  tabs: { flexDirection: 'row', padding: 10 },
-  tab: { flex: 1, padding: 10, alignItems: 'center', borderRadius: 8 },
-  tabActive: { backgroundColor: '#1e293b' },
-  tabText: { color: '#64748b', fontWeight: '600' },
-  tabTextActive: { color: '#fff' },
   gallery: { padding: 5, paddingBottom: 100 },
   imageContainer: { margin: 5, width: ITEM_WIDTH, height: ITEM_WIDTH, borderRadius: 8, overflow: 'hidden', backgroundColor: '#1e293b' },
   thumbnail: { width: '100%', height: '100%' },
@@ -792,8 +870,6 @@ const styles = StyleSheet.create({
   spinner: { position: 'absolute' },
   modalActionsRow: { flexDirection: 'row', gap: 15, position: 'absolute', bottom: 50, width: '90%', justifyContent: 'center' },
   modalSmallBtn: { flex: 1, maxWidth: 180, backgroundColor: '#3b82f6', padding: 18, borderRadius: 16, alignItems: 'center' },
-  adminBar: { padding: 10 },
-  inviteButtonFull: { backgroundColor: '#10b981', padding: 12, borderRadius: 8, alignItems: 'center' },
   promptCard: { backgroundColor: '#1e293b', padding: 25, borderRadius: 16, width: '85%', borderWidth: 1, borderColor: '#334155' },
   promptTitle: { color: '#fff', fontSize: 18, fontWeight: 'bold', marginBottom: 20 },
   qrCard: { backgroundColor: '#fff', padding: 30, borderRadius: 24, width: '85%', alignItems: 'center' },
@@ -808,5 +884,29 @@ const styles = StyleSheet.create({
   unsupportedCard: { backgroundColor: '#1e293b', padding: 40, borderRadius: 20, alignItems: 'center', width: '80%' },
   unsupportedIcon: { fontSize: 64, marginBottom: 20 },
   unsupportedText: { color: '#fff', fontSize: 18, fontWeight: 'bold', textAlign: 'center' },
-  unsupportedSub: { color: '#64748b', fontSize: 14, marginTop: 10, textAlign: 'center' }
+  unsupportedSub: { color: '#64748b', fontSize: 14, marginTop: 10, textAlign: 'center' },
+  // Drawer Styles
+  drawerContainer: { flex: 1, flexDirection: 'row' },
+  drawerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' },
+  drawerContent: { width: 280, height: '100%', backgroundColor: '#1e293b', padding: 25, paddingTop: 60 },
+  drawerHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 40 },
+  drawerTitle: { fontSize: 24, fontWeight: 'bold', color: '#fff' },
+  drawerUserInfo: { marginBottom: 30 },
+  drawerRoleLabel: { color: '#64748b', fontSize: 12, textTransform: 'uppercase', marginBottom: 5 },
+  drawerRoleValue: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
+  drawerDivider: { height: 1, backgroundColor: '#334155', marginBottom: 20 },
+  drawerItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 15, marginBottom: 10 },
+  drawerItemIcon: { fontSize: 20, marginRight: 15 },
+  drawerItemText: { color: '#e2e8f0', fontSize: 16, fontWeight: '600' },
+  drawerFooter: { borderTopWidth: 1, borderTopColor: '#334155', paddingTop: 20, alignItems: 'center' },
+  drawerFooterText: { color: '#475569', fontSize: 12 },
+  // Stats Progress Bar
+  progressBarBg: { height: 8, backgroundColor: '#0f172a', borderRadius: 4, marginVertical: 10, overflow: 'hidden' },
+  progressBarFill: { height: '100%', borderRadius: 4 },
+  // Extra
+  promptSub: { color: '#94a3b8', fontSize: 14, marginBottom: 10 },
+  folderSelectItem: { flexDirection:'row', justifyContent:'space-between', padding: 15, backgroundColor: '#0f172a', borderRadius: 8, marginBottom: 8 },
+  folderSelectItemActive: { backgroundColor: '#3b82f6' },
+  folderSelectItemText: { color: '#94a3b8' },
+  folderSelectItemTextActive: { color: '#fff', fontWeight: 'bold' }
 });
