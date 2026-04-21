@@ -390,6 +390,7 @@ export default function App() {
       <StatusBar barStyle="light-content" />       
       {/* Header */}
       <View style={styles.header}>
+        <View style={{flexDirection: 'row', alignItems: 'center'}}>
             {view === 'stats' && (
                 <TouchableOpacity onPress={() => setView('gallery')} style={{marginRight:15}}>
                     <MaterialCommunityIcons name="arrow-left" size={28} color="#3b82f6" />
@@ -655,17 +656,15 @@ export default function App() {
 
                   <View style={styles.modalActionsRow}>
                       <TouchableOpacity 
-                        style={[styles.modalSmallBtn, (!previewSrc) && styles.buttonDisabled]} 
+                        style={[styles.modalActionCircle, (!previewSrc) && styles.buttonDisabled]} 
                         onPress={handleDownload}
                         disabled={!previewSrc}
                       >
-                          <MaterialCommunityIcons name="download" size={20} color="#fff" style={{marginRight:8}} />
-                          <Text style={styles.buttonText}>Descargar</Text>
+                          <MaterialCommunityIcons name="download" size={24} color="#fff" />
                       </TouchableOpacity>
                       {role === 'admin' && (
-                          <TouchableOpacity style={[styles.modalSmallBtn, {backgroundColor: '#ef4444'}]} onPress={handleDeleteItem}>
-                               <MaterialCommunityIcons name="trash-can-outline" size={20} color="#fff" style={{marginRight:8}} />
-                               <Text style={styles.buttonText}>Borrar</Text>
+                          <TouchableOpacity style={[styles.modalActionCircle, {backgroundColor: '#ef4444'}]} onPress={handleDeleteItem}>
+                               <MaterialCommunityIcons name="trash-can-outline" size={24} color="#fff" />
                           </TouchableOpacity>
                       )}
                   </View>
@@ -892,6 +891,7 @@ const styles = StyleSheet.create({
   spinner: { position: 'absolute' },
   modalActionsRow: { flexDirection: 'row', gap: 15, position: 'absolute', bottom: 50, width: '90%', justifyContent: 'center' },
   modalSmallBtn: { flex: 1, maxWidth: 180, backgroundColor: '#3b82f6', padding: 18, borderRadius: 16, alignItems: 'center' },
+  modalActionCircle: { width: 60, height: 60, borderRadius: 30, backgroundColor: '#3b82f6', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: {width:0,height:2}, shadowOpacity:0.3, shadowRadius:4, elevation:5 },
   promptCard: { backgroundColor: '#1e293b', padding: 25, borderRadius: 16, width: '85%', borderWidth: 1, borderColor: '#334155' },
   promptTitle: { color: '#fff', fontSize: 18, fontWeight: 'bold', marginBottom: 20 },
   qrCard: { backgroundColor: '#fff', padding: 30, borderRadius: 24, width: '85%', alignItems: 'center' },
