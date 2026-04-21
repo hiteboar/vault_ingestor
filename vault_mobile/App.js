@@ -80,6 +80,10 @@ export default function App() {
   const [lastUpdated, setLastUpdated] = useState(new Date());
 
   useEffect(() => {
+    checkConnection();
+  }, []);
+
+  useEffect(() => {
     const subscription = AppState.addEventListener('change', nextAppState => {
       if (nextAppState === 'active') {
         loadData();
@@ -253,8 +257,8 @@ export default function App() {
     }
   };
 
-  const handleUpload = async (type) => {
-    result = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
+  const handleUpload = async () => {
+    const result = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
 
     if (!result.canceled) {
       setUploading(true);
