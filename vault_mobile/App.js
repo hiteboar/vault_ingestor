@@ -14,6 +14,7 @@ import {
   Modal,
   Alert
 } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Video, ResizeMode } from 'expo-av';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -389,21 +390,20 @@ export default function App() {
       <StatusBar barStyle="light-content" />       
       {/* Header */}
       <View style={styles.header}>
-        <View style={{flexDirection: 'row', alignItems: 'center'}}>
             {view === 'stats' && (
                 <TouchableOpacity onPress={() => setView('gallery')} style={{marginRight:15}}>
-                    <Text style={{fontSize: 24, color: '#3b82f6'}}>←</Text>
+                    <MaterialCommunityIcons name="arrow-left" size={28} color="#3b82f6" />
                 </TouchableOpacity>
             )}
             <Text style={styles.headerTitle}>{view === 'stats' ? 'Panel de Control' : 'Vault Ingestor'}</Text>
         </View>
         <View style={{flexDirection: 'row', alignItems:'center'}}>
             <TouchableOpacity onPress={() => loadData(true)} disabled={loading} style={{marginRight: 20}}>
-                {loading ? <ActivityIndicator size="small" color="#3b82f6"/> : <Text style={{fontSize: 24}}>🔄</Text>}
+                {loading ? <ActivityIndicator size="small" color="#3b82f6"/> : <MaterialCommunityIcons name="refresh" size={28} color="#3b82f6" />}
             </TouchableOpacity>
             {!previewItem && (
                 <TouchableOpacity onPress={() => setDrawerOpen(true)}>
-                    <Text style={{fontSize: 28, color: '#fff'}}>☰</Text>
+                    <MaterialCommunityIcons name="menu" size={32} color="#fff" />
                 </TouchableOpacity>
             )}
         </View>
@@ -426,15 +426,21 @@ export default function App() {
                             style={[styles.folderChip, currentFolder === f && styles.folderChipActive]}
                             onPress={() => setCurrentFolder(f)}
                         >
+                            <MaterialCommunityIcons 
+                                name={f === 'root' ? 'calendar-clock' : 'folder-outline'} 
+                                size={16} 
+                                color={currentFolder === f ? '#fff' : '#94a3b8'} 
+                                style={{marginRight: 6}}
+                            />
                             <Text style={[styles.folderChipText, currentFolder === f && styles.folderChipTextActive]}>
-                                {f === 'root' ? '📅 Línea de Tiempo' : `📁 ${f}`}
+                                {f === 'root' ? 'Línea de Tiempo' : f}
                             </Text>
                         </TouchableOpacity>
                     )}
                 />
                 {role === 'admin' && (
                     <TouchableOpacity style={styles.addFolderBtn} onPress={() => setNewFolderModal(true)}>
-                        <Text style={styles.addFolderText}>＋</Text>
+                        <MaterialCommunityIcons name="plus" size={24} color="#fff" />
                     </TouchableOpacity>
                 )}
             </View>
@@ -463,7 +469,8 @@ export default function App() {
                 <View style={styles.folderActions}>
                     <Text style={styles.folderPathText}>Gestionando: {currentFolder}</Text>
                     <TouchableOpacity onPress={handleDeleteFolder} style={styles.deleteFolderBtn}>
-                        <Text style={styles.deleteFolderText}>🗑️ Eliminar Carpeta</Text>
+                        <MaterialCommunityIcons name="trash-can-outline" size={18} color="#ef4444" />
+                        <Text style={styles.deleteFolderText}> Eliminar Carpeta</Text>
                     </TouchableOpacity>
                 </View>
             )}
@@ -509,7 +516,7 @@ export default function App() {
                     <View style={styles.fab}><ActivityIndicator color="#fff"/></View>
                 ) : (
                     <TouchableOpacity style={styles.fab} onPress={handleUpload}>
-                        <Text style={styles.fabIcon}>＋</Text>
+                        <MaterialCommunityIcons name="plus" size={32} color="#fff" />
                     </TouchableOpacity>
                 )}
             </View>
@@ -517,7 +524,10 @@ export default function App() {
       ) : (
         <View style={styles.statsContainer}>
           <View style={styles.statCard}>
-             <Text style={styles.statLabel}>Uso de Disco</Text>
+             <View style={{flexDirection:'row', alignItems:'center', marginBottom: 10}}>
+                <MaterialCommunityIcons name="harddisk" size={20} color="#94a3b8" style={{marginRight:8}} />
+                <Text style={styles.statLabel}>Uso de Disco</Text>
+             </View>
              <View style={styles.progressBarBg}>
                 <View style={[styles.progressBarFill, { width: `${status?.disk?.percent || 0}%`, backgroundColor: (status?.disk?.percent > 90 ? '#ef4444' : '#3b82f6') }]} />
              </View>
@@ -528,7 +538,10 @@ export default function App() {
           </View>
 
           <View style={styles.statCard}>
-             <Text style={styles.statLabel}>Uso de RAM</Text>
+             <View style={{flexDirection:'row', alignItems:'center', marginBottom: 10}}>
+                <MaterialCommunityIcons name="memory" size={24} color="#94a3b8" style={{marginRight:8}} />
+                <Text style={styles.statLabel}>Uso de RAM</Text>
+             </View>
              <View style={styles.progressBarBg}>
                 <View style={[styles.progressBarFill, { width: `${status?.ram?.percent || 0}%`, backgroundColor: (status?.ram?.percent > 85 ? '#f59e0b' : '#10b981') }]} />
              </View>
@@ -539,7 +552,10 @@ export default function App() {
           </View>
 
           <View style={styles.statCard}>
-             <Text style={styles.statLabel}>Archivos en Bóveda</Text>
+             <View style={{flexDirection:'row', alignItems:'center', marginBottom: 10}}>
+                <MaterialCommunityIcons name="folder-multiple-image" size={20} color="#94a3b8" style={{marginRight:8}} />
+                <Text style={styles.statLabel}>Archivos en Bóveda</Text>
+             </View>
              <Text style={styles.statValue}>{status?.vault?.file_count || 0}</Text>
              <Text style={styles.statSub}>Total: {formatBytes(status?.vault?.total_size || 0)}</Text>
           </View>
@@ -643,11 +659,13 @@ export default function App() {
                         onPress={handleDownload}
                         disabled={!previewSrc}
                       >
-                          <Text style={styles.buttonText}>📤 Descargar</Text>
+                          <MaterialCommunityIcons name="download" size={20} color="#fff" style={{marginRight:8}} />
+                          <Text style={styles.buttonText}>Descargar</Text>
                       </TouchableOpacity>
                       {role === 'admin' && (
                           <TouchableOpacity style={[styles.modalSmallBtn, {backgroundColor: '#ef4444'}]} onPress={handleDeleteItem}>
-                               <Text style={styles.buttonText}>🗑️ Borrar</Text>
+                               <MaterialCommunityIcons name="trash-can-outline" size={20} color="#fff" style={{marginRight:8}} />
+                               <Text style={styles.buttonText}>Borrar</Text>
                           </TouchableOpacity>
                       )}
                   </View>
@@ -679,16 +697,16 @@ export default function App() {
                            style={styles.drawerItem} 
                            onPress={() => { setView('stats'); setDrawerOpen(false); }}
                        >
-                           <Text style={styles.drawerItemIcon}>📊</Text>
+                           <MaterialCommunityIcons name="monitor-dashboard" size={24} color="#3b82f6" style={styles.drawerItemIcon} />
                            <Text style={styles.drawerItemText}>Panel de Control</Text>
                        </TouchableOpacity>
 
                        {role === 'admin' && (
                            <TouchableOpacity 
                                style={styles.drawerItem} 
-                               onPress={() => setInviteConfigModal(true)}
+                               onPress={() => { setInviteConfigModal(true); setDrawerOpen(false); }}
                            >
-                               <Text style={styles.drawerItemIcon}>👤</Text>
+                               <MaterialCommunityIcons name="account-plus-outline" size={24} color="#10b981" style={styles.drawerItemIcon} />
                                <Text style={styles.drawerItemText}>Invitar Usuario</Text>
                            </TouchableOpacity>
                        )}
@@ -899,9 +917,9 @@ const styles = StyleSheet.create({
   drawerRoleLabel: { color: '#64748b', fontSize: 12, textTransform: 'uppercase', marginBottom: 5 },
   drawerRoleValue: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
   drawerDivider: { height: 1, backgroundColor: '#334155', marginBottom: 20 },
-  drawerItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 15, marginBottom: 10 },
-  drawerItemIcon: { fontSize: 20, marginRight: 15 },
-  drawerItemText: { color: '#e2e8f0', fontSize: 16, fontWeight: '600' },
+  drawerItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 18, paddingHorizontal: 15, marginBottom: 8, backgroundColor: '#2d3748', borderRadius: 12 },
+  drawerItemIcon: { marginRight: 15 },
+  drawerItemText: { color: '#e2e8f0', fontSize: 16, fontWeight: 'bold' },
   drawerFooter: { borderTopWidth: 1, borderTopColor: '#334155', paddingTop: 20, alignItems: 'center' },
   drawerFooterText: { color: '#475569', fontSize: 12 },
   // Stats Progress Bar
