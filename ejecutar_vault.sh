@@ -5,8 +5,6 @@
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_DIR" || exit
 
-# Envolver toda la ejecución en un bloque para enviar la salida a la consola y al log
-{
 echo "=========================================="
 echo "   Vault Ingestor: Sistema de Almacenaje"
 echo "   Fecha: $(date)"
@@ -47,7 +45,7 @@ fi
 echo "[*] Gestionando el servicio vault_ingestor..."
 SERVICE_NAME="vault_ingestor"
 
-if systemctl list-units --type=service | grep -q "$SERVICE_NAME"; then
+if systemctl list-unit-files | grep -q "$SERVICE_NAME"; then
     if systemctl is-active --quiet "$SERVICE_NAME"; then
         echo "[*] El servicio ya estaba corriendo. Reiniciando para aplicar posibles cambios..."
         sudo systemctl restart "$SERVICE_NAME"
@@ -59,7 +57,7 @@ else
     echo "[!] Advertencia: El servicio systemd ($SERVICE_NAME) no está instalado."
     echo "[*] Iniciando en segundo plano de forma manual..."
     pkill -f "python.*app.py" 2>/dev/null
-    nohup .venv/bin/python app.py > /dev/null 2>&1 &
+    nohup .venv/bin/python app.py >> "$PROJECT_DIR/app.log" 2>&1 &
 fi
 
 echo "[*] Esperando a que el sistema esté listo (Cloudflare Tunnel)..."
@@ -84,7 +82,21 @@ try:
             resp = requests.get("http://localhost:8001/api/config", timeout=2)
             if resp.status_code == 200:
                 auth_resp = requests.get("http://localhost:8001/api/auth/request", timeout=2)
-                if auth_resp.status_code == 200:
+                
+                if auth_resp.status_code == 403:
+                    print("\n" + "="*50)
+                    print("   [!] DISPOSITIVO ADMINISTRADOR YA VINCULADO")
+                    print("="*50)
+                    print("   Ya tienes un móvil emparejado como administrador.")
+                    print("   Si deseas invitar a más usuarios, hazlo desde la App.")
+                    print("\n   ¿Has perdido el acceso en tu móvil principal?")
+                    print("   Para reiniciar las vinculaciones, ejecuta este comando:")
+                    print("   rm -rf /mnt/vault/.vault/devices.json")
+                    print("   (O busca el archivo .vault/devices.json en tu STORAGE_DIR)")
+                    print("="*50)
+                    break
+                    
+                elif auth_resp.status_code == 200:
                     data = auth_resp.json()
                     print("\n" + "="*50)
                     print("   ¡SISTEMA LISTO PARA CONECTAR!")
@@ -114,5 +126,4 @@ EOF
 echo ""
 echo "[*] La terminal ya no está bloqueada. El sistema sigue corriendo en segundo plano."
 echo "[*] Puedes cerrar esta ventana."
-} 2>&1 | tee -a "$PROJECT_DIR/app.log"
 
