@@ -202,9 +202,10 @@ async def startup_event():
                     bufsize=1
                 )
                 
-                # Buscar la URL en la salida
+                # Buscar la URL y mantener el pipe abierto para evitar crash (SIGPIPE)
+                found_url = False
                 for line in process.stdout:
-                    if "trycloudflare.com" in line:
+                    if not found_url and "trycloudflare.com" in line:
                         parts = line.split()
                         for p in parts:
                             if "https://" in p and "trycloudflare.com" in p:
@@ -214,7 +215,8 @@ async def startup_event():
                                 print("   ACCESO REMOTO (OFICIAL) ACTIVADO")
                                 print(f"   URL: {url}")
                                 print("!"*50)
-                                return # Éxito
+                                found_url = True
+
                 
             except Exception as e:
                 print(f"[*] Cloudflared del sistema no disponible o falló: {e}")
