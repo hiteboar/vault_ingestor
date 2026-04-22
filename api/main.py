@@ -186,22 +186,49 @@ async def startup_event():
     
     if os.getenv("ENABLE_REMOTE_ACCESS", "false").lower() == "true":
         import threading
+        import subprocess
+        
         def _start_tunnel():
             global cloudflare_tunnel
+            port = int(os.getenv("API_PORT", "8001"))
+            
+            # Estrategia 1: Intentar usar el binario oficial del sistema (más estable en Pi)
+            try:
+                process = subprocess.Popen(
+                    ["cloudflared", "tunnel", "--url", f"http://localhost:{port}"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1
+                )
+                
+                # Buscar la URL en la salida
+                for line in process.stdout:
+                    if "trycloudflare.com" in line:
+                        parts = line.split()
+                        for p in parts:
+                            if "https://" in p and "trycloudflare.com" in p:
+                                url = p.strip()
+                                os.environ["PUBLIC_URL"] = url
+                                print("\n" + "!"*50)
+                                print("   ACCESO REMOTO (OFICIAL) ACTIVADO")
+                                print(f"   URL: {url}")
+                                print("!"*50)
+                                return # Éxito
+                
+            except Exception as e:
+                print(f"[*] Cloudflared del sistema no disponible o falló: {e}")
+
+            # Estrategia 2: Fallback a pycloudflared (para Windows/otros)
             try:
                 from pycloudflared import try_cloudflare
-                # Usar puerto de env o fallback a 8001 que es el nuevo default en app.py
-                port = int(os.getenv("API_PORT", "8001"))
                 cloudflare_tunnel = try_cloudflare(port=port)
                 os.environ["PUBLIC_URL"] = cloudflare_tunnel.tunnel
                 
                 print("\n" + "!"*50)
-                print("   ACCESO REMOTO ACTIVADO CON ÉXITO")
+                print("   ACCESO REMOTO (PY) ACTIVADO")
                 print(f"   URL: {cloudflare_tunnel.tunnel}")
                 print("!"*50)
-                print("[*] Escanea el QR desde la App para conectar fuera de casa.")
-                print(f"[*] Endpoint QR: http://localhost:{port}/api/auth/qr")
-                print("="*50 + "\n")
             except Exception as e:
                 print(f"\n[TUNNEL_ERROR] No se pudo iniciar el acceso remoto: {e}")
                 print("[*] El sistema seguirá funcionando de forma local.\n")

@@ -8,7 +8,15 @@ cd "$PROJECT_DIR" || exit
 
 echo "[1/5] Instalando dependencias base del sistema..."
 sudo apt-get update
-sudo apt-get install -y libopenjp2-7 libtiff6 libjpeg-dev zlib1g-dev python3-venv rustc cargo libffi-dev libssl-dev ffmpeg
+sudo apt-get install -y libopenjp2-7 libtiff6 libjpeg-dev zlib1g-dev python3-venv rustc cargo libffi-dev libssl-dev ffmpeg curl
+
+# Instalar Cloudflared oficial para ARM (armv7/armhf)
+if ! command -v cloudflared &> /dev/null; then
+    echo "[*] Instalando Cloudflared oficial para Raspberry Pi..."
+    curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-armhf.deb
+    sudo dpkg -i cloudflared.deb
+    rm cloudflared.deb
+fi
 
 echo "[2/5] Regenerando entorno virtual (Python)..."
 if [ ! -d ".venv" ]; then
