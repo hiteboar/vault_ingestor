@@ -76,11 +76,14 @@ import time
 
 print("\n[*] Consultando datos de emparejamiento...")
 try:
-    max_retries = 10
+    max_retries = 15
     for i in range(max_retries):
         try:
             resp = requests.get("http://localhost:8001/api/config", timeout=2)
             if resp.status_code == 200:
+                config_data = resp.json()
+                remote_enabled = config_data.get("ENABLE_REMOTE_ACCESS", "false").lower() == "true"
+                
                 auth_resp = requests.get("http://localhost:8001/api/auth/request", timeout=2)
                 
                 if auth_resp.status_code == 403:
@@ -98,6 +101,14 @@ try:
                     
                 elif auth_resp.status_code == 200:
                     data = auth_resp.json()
+                    
+                    # Si el acceso remoto está activado pero la URL es local, esperamos a que Cloudflare termine
+                    is_local_url = any(x in data['url'] for x in ["localhost", "127.0.0.1", "192.168.", "10."])
+                    if remote_enabled and is_local_url and i < (max_retries - 2):
+                        print(f"[*] El servidor está vivo pero el túnel remoto aún se está construyendo. Esperando... ({i+1}/{max_retries})")
+                        time.sleep(3)
+                        continue
+                        
                     print("\n" + "="*50)
                     print("   ¡SISTEMA LISTO PARA CONECTAR!")
                     print("="*50)
