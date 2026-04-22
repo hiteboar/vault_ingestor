@@ -190,12 +190,21 @@ async def startup_event():
             global cloudflare_tunnel
             try:
                 from pycloudflared import try_cloudflare
-                port = int(os.getenv("API_PORT", "8000"))
+                # Usar puerto de env o fallback a 8001 que es el nuevo default en app.py
+                port = int(os.getenv("API_PORT", "8001"))
                 cloudflare_tunnel = try_cloudflare(port=port)
                 os.environ["PUBLIC_URL"] = cloudflare_tunnel.tunnel
-                print(f"\n[TUNNEL] Acceso remoto activado!\nURL Pública: {cloudflare_tunnel.tunnel}\n")
+                
+                print("\n" + "!"*50)
+                print("   ACCESO REMOTO ACTIVADO CON ÉXITO")
+                print(f"   URL: {cloudflare_tunnel.tunnel}")
+                print("!"*50)
+                print("[*] Escanea el QR desde la App para conectar fuera de casa.")
+                print(f"[*] Endpoint QR: http://localhost:{port}/api/auth/qr")
+                print("="*50 + "\n")
             except Exception as e:
-                print(f"\n[TUNNEL_ERROR] {e}\n")
+                print(f"\n[TUNNEL_ERROR] No se pudo iniciar el acceso remoto: {e}")
+                print("[*] El sistema seguirá funcionando de forma local.\n")
                 
         threading.Thread(target=_start_tunnel, daemon=True).start()
 

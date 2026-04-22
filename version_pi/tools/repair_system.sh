@@ -6,11 +6,11 @@ echo "=== Vault Ingestor: Reparación de Sistema (Raspberry Pi) ==="
 PROJECT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$PROJECT_DIR" || exit
 
-echo "[1/4] Instalando dependencias base del sistema..."
+echo "[1/5] Instalando dependencias base del sistema..."
 sudo apt-get update
-sudo apt-get install -y libopenjp2-7 libtiff6 libjpeg-dev zlib1g-dev python3-venv rustc cargo libffi-dev libssl-dev
+sudo apt-get install -y libopenjp2-7 libtiff6 libjpeg-dev zlib1g-dev python3-venv rustc cargo libffi-dev libssl-dev ffmpeg
 
-echo "[2/4] Regenerando entorno virtual (Python)..."
+echo "[2/5] Regenerando entorno virtual (Python)..."
 if [ ! -d ".venv" ]; then
     echo "Creando .venv..."
     python3 -m venv .venv
@@ -25,7 +25,15 @@ pip install --upgrade pip
 pip install -r requirements.txt
 pip install pycloudflared
 
-echo "[3/4] Reparando Servicio de Auto-Arrranque (Systemd) para resiliencia..."
+echo "[3/5] Verificando configuración .env..."
+if [ ! -f ".env" ]; then
+    echo "Creando .env inicial..."
+    cp .env.example .env
+    # Forzar acceso remoto en la reparación si es un sistema nuevo
+    sed -i 's/ENABLE_REMOTE_ACCESS=false/ENABLE_REMOTE_ACCESS=true/g' .env
+fi
+
+echo "[4/5] Reparando Servicio de Auto-Arrranque (Systemd) para resiliencia..."
 # Usamos Restart=always para garantizar que se recupere automáticamente ante caídas
 
 USER_NAME=$USER
@@ -52,7 +60,7 @@ sudo mv "$SERVICE_FILE" /etc/systemd/system/vault_ingestor.service
 sudo systemctl daemon-reload
 sudo systemctl enable vault_ingestor
 
-echo "[4/4] Restaurando el Servicio..."
+echo "[5/5] Restaurando el Servicio..."
 sudo systemctl restart vault_ingestor
 
 echo ""

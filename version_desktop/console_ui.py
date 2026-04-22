@@ -13,14 +13,18 @@ import uvicorn
 import pystray
 from PIL import Image, ImageDraw
 from api.main import app as fastapi_app
+from app import bootstrap # Importamos la lógica de arranque de app.py
 
 # Configuración básica
-API_URL = "http://localhost:8081"
-UI_TITLE = "Vault Ingestor - Management Console"
+API_PORT = int(os.getenv("API_PORT", "8001"))
+API_URL = f"http://localhost:{API_PORT}"
+UI_TITLE = "Vault Ingestor - Consola de Gestión"
 
 def run_server():
     """Lanza el servidor FastAPI en un hilo separado."""
-    uvicorn.run(fastapi_app, host="127.0.0.1", port=8081)
+    # Aseguramos que el bootstrap se ejecute antes de arrancar uvicorn
+    bootstrap()
+    uvicorn.run(fastapi_app, host="0.0.0.0", port=API_PORT)
 
 class Api:
     """Clase puente entre Python y JavaScript."""
@@ -287,23 +291,15 @@ HTML_CONTENT = """
 
         async function generatePairing() {
             try {
-                // Fetch basic info first for the PIN
-                const response = await fetch('http://localhost:8081/api/auth/request');
+                // Obtenemos el PIN y la URL de la sesión de emparejamiento
+                const response = await fetch('/api/auth/request');
                 const data = await response.json();
                 
                 document.getElementById('pairing-pin').innerText = data.pin;
                 
-                // Now load the actual QR image (which generates a new pin internally, 
-                // but we call qr specifically to get the drawing).
-                // Actually our /api/auth/qr creates its own session. 
-                // To keep them in sync, it's better if /qr returns the image for the current session or similar.
-                // For simplicity now, /qr will be the primary source.
-                
+                // Cargamos el QR que representa esa misma sesión
                 const qrImg = document.getElementById('pairing-qr');
-                qrImg.src = 'http://localhost:8081/api/auth/qr?t=' + Date.now();
-                
-                // We'll need another small endpoint or change /qr 
-                // but for now, the user scans the QR or uses the PIN from the QR data.
+                qrImg.src = '/api/auth/qr?t=' + Date.now();
                 
             } catch (e) {
                 console.error("Error generating pairing", e);
@@ -312,7 +308,7 @@ HTML_CONTENT = """
 
         async function loadConfig() {
             try {
-                const response = await fetch('http://localhost:8081/api/config');
+                const response = await fetch('/api/config');
                 const data = await response.json();
                 
                 document.getElementById('input-STORAGE_DIR').value = data.STORAGE_DIR || '';
@@ -325,7 +321,7 @@ HTML_CONTENT = """
 
         async function updateSingleConfig(key, value) {
             if (!value || value.trim() === '') return;
-            await fetch('http://localhost:8081/api/config', {
+            await fetch('/api/config', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ key: key, value: value.trim() })
@@ -358,7 +354,7 @@ HTML_CONTENT = """
 
         async function updateStats() {
             try {
-                const response = await fetch('http://localhost:8081/api/system/status');
+                const response = await fetch('/api/system/status');
                 const data = await response.json();
                 
                 document.getElementById('disk-text').innerText = Math.round(data.disk.percent) + '%';
@@ -374,6 +370,7 @@ HTML_CONTENT = """
 
         function addLog(msg) {
             const container = document.getElementById('log-container');
+            if (!container) return;
             const div = document.createElement('div');
             const time = new Date().toLocaleTimeString();
             div.innerHTML = `<span class="text-slate-600">[${time}]</span> ${msg}`;
@@ -387,7 +384,7 @@ HTML_CONTENT = """
              addLog("[System] Verificando entorno de instalación...");
              setTimeout(async () => {
                  try {
-                     const response = await fetch('http://localhost:8081/api/config');
+                     const response = await fetch('/api/config');
                      const data = await response.json();
                      
                      // Si los valores críticos no están configurados, forzar el asistente
@@ -397,6 +394,8 @@ HTML_CONTENT = """
                      } else {
                          addLog("Dashboard listo y conectado.");
                          updateStats();
+                         // Mostrar QR por defecto en el primer inicio exitoso
+                         switchView('view-mobile');
                      }
                  } catch (e) {
                      // Si falla, vamos al dashboard por defecto
@@ -423,9 +422,8 @@ if __name__ == "__main__":
     
     # Interceptar el cierre: en lugar de destruir, escondemos la ventana (background mode)
     def on_closing():
-        # Llamar directamente suele ser soportado y evita crashes de subprocesos no gestionados 
-        # con la API de Win32 que corrompan el Main Thread.
         win.hide()
+        # Notificamos al usuario la primera vez que se oculta
         return False
         
     win.events.closing += on_closing

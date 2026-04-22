@@ -55,6 +55,18 @@ def main():
         print("  - API (8000/8001)       : ⚠️  Cerrado o No Disponible")
         
     print("-" * 40)
+    print("Configuración de Acceso Remoto:")
+    remote_enabled = os.getenv("ENABLE_REMOTE_ACCESS", "false").lower() == "true"
+    print(f"  - Acceso Remoto Habilitado: {'✅ Sí' if remote_enabled else '❌ No (Solo Local)'}")
+    
+    public_url = os.getenv("PUBLIC_URL")
+    if public_url:
+        print(f"  - URL Pública Detectada   : ✅ {public_url}")
+    elif remote_enabled:
+        print(f"  - .env Configurado        : {'✅ OK' if os.path.exists(os.path.join(project_dir, '.env')) else '❌ Falta archivo .env'}")
+        print(f"  - URL Pública Detectada   : ⚠️  Esperando inicio de túnel...")
+    
+    print("-" * 40)
     
     if not all_found:
         print("⚠️  Faltan dependencias críticas.")

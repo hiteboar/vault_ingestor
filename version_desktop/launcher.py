@@ -150,7 +150,7 @@ def check_for_updates():
     
     remote_hash = get_latest_remote_hash()
     if not remote_hash:
-        log("No se pudo obtener la versión remota.")
+        log("No se pudo obtener la versión remota. Saltando actualización.")
         return False
 
     if local_hash != remote_hash:
@@ -159,6 +159,26 @@ def check_for_updates():
     else:
         log("Ya estás en la última versión.")
         return False
+
+def setup_config():
+    """Asegura que el archivo .env exista y tenga los valores necesarios."""
+    env_file = BASE_DIR / ".env"
+    example_file = BASE_DIR / ".env.example"
+    
+    if not env_file.exists():
+        if example_file.exists():
+            log("Creando configuración inicial desde .env.example...")
+            shutil.copy(example_file, env_file)
+            
+            # Forzar acceso remoto activado para nuevos usuarios
+            content = env_file.read_text()
+            if "ENABLE_REMOTE_ACCESS" not in content:
+                env_file.write_text(content + "\nENABLE_REMOTE_ACCESS=true\n")
+            else:
+                new_content = content.replace("ENABLE_REMOTE_ACCESS=false", "ENABLE_REMOTE_ACCESS=true")
+                env_file.write_text(new_content)
+        else:
+            log("AVISO: No se encontró .env ni .env.example. Usando valores por defecto.")
 
 def setup_environment():
     venv_dir = BASE_DIR / ".venv"
@@ -224,13 +244,16 @@ if __name__ == "__main__":
         else:
             check_for_updates()
         
-        # 2. Setup env
+        # 2. Setup config
+        setup_config()
+        
+        # 3. Setup env
         if not setup_environment():
             log("ERROR: No se pudo configurar el entorno.")
             input("\nPresiona Enter para cerrar...")
             sys.exit(1)
         
-        # 3. Lanzar
+        # 4. Lanzar
         launch_app()
     except Exception as e:
         log(f"FALLO CRÍTICO GLOBAL: {str(e)}")
