@@ -1,20 +1,18 @@
 #!/bin/bash
 # Script de lanzamiento y configuración rápida para Vault Ingestor en Raspberry Pi
 
-# Redirigir toda la salida (pantalla y errores) a la terminal y también añadirla a app.log
-exec > >(tee -a app.log) 2>&1
+# Asegurar que operamos en el directorio del proyecto
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$PROJECT_DIR" || exit
 
+# Envolver toda la ejecución en un bloque para enviar la salida a la consola y al log
+{
 echo "=========================================="
 echo "   Vault Ingestor: Sistema de Almacenaje"
 echo "   Fecha: $(date)"
 echo "=========================================="
 
-# Directorio base
-PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$PROJECT_DIR" || exit
-
 echo "[*] Preparando permisos del sistema..."
-# Dar permisos al directorio del proyecto para evitar errores de escritura en logs o bases de datos internas
 sudo chown -R $USER:$USER "$PROJECT_DIR"
 sudo chmod -R 775 "$PROJECT_DIR"
 
@@ -27,10 +25,11 @@ if [ -f ".env" ]; then
     fi
 fi
 
-# Intentar dar permisos al STORAGE_DIR
-if [[ "$STORAGE_DIR" != /* ]]; then
-    STORAGE_DIR="$PROJECT_DIR/$STORAGE_DIR"
-fi
+# Intentar dar permisos al STORAGE_DIR (Ruta absoluta o relativa)
+case "$STORAGE_DIR" in
+    /*) ;; # Es absoluta, la dejamos igual
+    *) STORAGE_DIR="$PROJECT_DIR/$STORAGE_DIR" ;; # Es relativa
+esac
 
 if [ -d "$STORAGE_DIR" ]; then
     echo "[*] Aplicando permisos a la carpeta de almacenamiento configurada: $STORAGE_DIR"
@@ -38,7 +37,7 @@ if [ -d "$STORAGE_DIR" ]; then
     sudo chmod -R 775 "$STORAGE_DIR" 2>/dev/null
 fi
 
-# Si el usuario tiene montado un disco externo en /mnt/vault, aseguramos los permisos directamente
+# Permisos disco externo
 if [ -d "/mnt/vault" ]; then
     echo "[*] Aplicando permisos a disco externo detectado en /mnt/vault..."
     sudo chown -R $USER:$USER "/mnt/vault" 2>/dev/null
@@ -48,7 +47,6 @@ fi
 echo "[*] Gestionando el servicio vault_ingestor..."
 SERVICE_NAME="vault_ingestor"
 
-# Comprobamos si el servicio systemd existe y actuamos
 if systemctl list-units --type=service | grep -q "$SERVICE_NAME"; then
     if systemctl is-active --quiet "$SERVICE_NAME"; then
         echo "[*] El servicio ya estaba corriendo. Reiniciando para aplicar posibles cambios..."
@@ -67,7 +65,6 @@ fi
 echo "[*] Esperando a que el sistema esté listo (Cloudflare Tunnel)..."
 sleep 6
 
-# 2. Obtener información de conexión y mostrar QR en terminal
 if [ -f ".venv/bin/python" ]; then
     PYTHON_EXE=".venv/bin/python"
 else
@@ -117,4 +114,5 @@ EOF
 echo ""
 echo "[*] La terminal ya no está bloqueada. El sistema sigue corriendo en segundo plano."
 echo "[*] Puedes cerrar esta ventana."
+} 2>&1 | tee -a "$PROJECT_DIR/app.log"
 
