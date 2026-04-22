@@ -33,7 +33,7 @@ def main():
         "fastapi",
         "uvicorn",
         "PIL",               # Pillow requiere compilacion a veces
-        "pycloudflared"      # Vital para el túnel exterior remoto
+        "pycloudflared"      # Túnel remoto (Fallback)
     ]
     
     print("Módulos Críticos y Dependencias de Red:")
@@ -41,9 +41,17 @@ def main():
     for mod in modules:
         found, status = check_module(mod)
         print(f"  - {mod:20}: {status}")
-        if not found:
+        if not found and mod != "pycloudflared": # pycloudflared es opcional si está el binario oficial
             all_found = False
             
+    # Comprobar el binario oficial de cloudflared
+    try:
+        import subprocess
+        subprocess.run(["cloudflared", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        print(f"  - {'cloudflared (bin)':20}: ✅ Instalado (Nativo)")
+    except Exception:
+        print(f"  - {'cloudflared (bin)':20}: ⚠️  No encontrado (Usando Fallback)")
+        
     print("-" * 40)
     print("Estado de Red y Procesos de Vault Ingestor:")
     
@@ -56,6 +64,15 @@ def main():
         
     print("-" * 40)
     print("Configuración de Acceso Remoto:")
+    
+    # Intentar cargar .env para leer valores reales
+    try:
+        from dotenv import load_dotenv
+        env_path = os.path.join(project_dir, ".env")
+        load_dotenv(dotenv_path=env_path)
+    except ImportError:
+        pass
+        
     remote_enabled = os.getenv("ENABLE_REMOTE_ACCESS", "false").lower() == "true"
     print(f"  - Acceso Remoto Habilitado: {'✅ Sí' if remote_enabled else '❌ No (Solo Local)'}")
     
@@ -64,7 +81,7 @@ def main():
         print(f"  - URL Pública Detectada   : ✅ {public_url}")
     elif remote_enabled:
         print(f"  - .env Configurado        : {'✅ OK' if os.path.exists(os.path.join(project_dir, '.env')) else '❌ Falta archivo .env'}")
-        print(f"  - URL Pública Detectada   : ⚠️  Esperando inicio de túnel...")
+        print(f"  - URL Pública             : ⚠️  Esperando inicio de túnel (ver log)...")
     
     print("-" * 40)
     

@@ -68,12 +68,17 @@ sudo mv "$SERVICE_FILE" /etc/systemd/system/vault_ingestor.service
 sudo systemctl daemon-reload
 sudo systemctl enable vault_ingestor
 
-echo "[5/5] Restaurando el Servicio..."
+echo ""
+echo "=== Reparación Completada! ==="
+echo "1. Dependencias y archivos vitales han sido restaurados."
+echo "2. Systemd ha sido configurado para autorecuperar la aplicación (Restart=always)."
+echo ""
+echo "[5/5] Procediendo al REINICIO del servicio en segundo plano..."
+echo "      (Esta operación puede tardar unos segundos, por favor espera...)"
 sudo systemctl restart vault_ingestor
 
 echo ""
-echo "=== Reparación Completada! ==="
-echo "1. Systemd reiniciará automáticamente la aplicación si sufre un error (Restart=always)."
-echo "2. El control de conectividad remoto y los túneles a la app mobile se restaurarán apenas inicie el código en app.py."
-echo "Puedes validar que todo funcionó correctamente con:"
-echo "   python version_pi/tools/check_system.py"
+echo "[✔] Servicio reiniciado con éxito."
+echo "El túnel remoto y la conexión con la App móvil se están restableciendo."
+echo "Para obtener el nuevo Código QR o ver el estado, ejecuta:"
+echo "   ./ejecutar_vault.sh"
