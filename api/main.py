@@ -498,9 +498,12 @@ async def create_invite(data: InviteRequest, x_device_token: str = Header(...)):
 @app.post("/api/auth/verify")
 async def verify_pairing(data: PinVerify):
     """Verifies a PIN and returns a permanent device token."""
+    print(f"[DEBUG_AUTH] verify_pairing called with PIN: {data.pin}")
     token = auth.verify_pin(data.pin)
     if not token:
+        print("[DEBUG_AUTH] verify_pairing FAILED - Invalid or expired PIN")
         raise HTTPException(status_code=400, detail="Invalid or expired PIN")
+    print(f"[DEBUG_AUTH] verify_pairing SUCCESS - Token generated")
     return {"token": token}
 
 @app.get("/api/auth/me")
