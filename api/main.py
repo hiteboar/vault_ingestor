@@ -235,12 +235,62 @@ async def startup_event():
                 
         threading.Thread(target=_start_tunnel, daemon=True).start()
 
-class PinVerify(BaseModel):
-    pin: str
-
 class ConfigUpdate(BaseModel):
     key: str
     value: str
+
+class PinVerify(BaseModel):
+    pin: str
+
+class FolderCreate(BaseModel):
+    name: str
+
+@app.get("/api/folders")
+async def list_folders(x_device_token: str = Header(...)):
+    """Devuelve la lista de carpetas disponibles en el almacenamiento."""
+    device = auth.get_device_info(x_device_token)
+    if not device:
+        raise HTTPException(status_code=401, detail="Invalid token")
+        
+    role = device.get("role", "standard")
+    allowed_folders = device.get("allowed_folders", [])
+    
+    base_upload = STORAGE_DIR / "uploaded_files"
+    if not base_upload.exists():
+        return []
+        
+    folders = []
+    # Incluimos 'root' como carpeta virtual por defecto
+    if role == "admin" or "root" in allowed_folders or "*" in allowed_folders:
+        folders.append("root")
+        
+    for item in base_upload.iterdir():
+        if item.is_dir():
+            folder_name = item.name
+            if role == "admin" or folder_name in allowed_folders or "*" in allowed_folders:
+                folders.append(folder_name)
+                
+    return sorted(list(set(folders)))
+
+@app.post("/api/folders")
+async def create_folder(data: FolderCreate, x_device_token: str = Header(...)):
+    """Crea una nueva carpeta física en el almacenamiento."""
+    device = auth.get_device_info(x_device_token)
+    if not device or device.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can create folders")
+        
+    # Limpiar el nombre de la carpeta
+    clean_name = "".join(c for c in data.name if c.isalnum() or c in (" ", "-", "_")).strip()
+    if not clean_name or clean_name == "root":
+        raise HTTPException(status_code=400, detail="Invalid folder name")
+        
+    folder_path = STORAGE_DIR / "uploaded_files" / clean_name
+    try:
+        folder_path.mkdir(parents=True, exist_ok=True)
+        log_audit("CREATE_FOLDER", folder_path, device)
+        return {"status": "success", "folder": clean_name}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/items")
 async def get_items(x_device_token: str = Header(...)):
