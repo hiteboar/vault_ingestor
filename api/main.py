@@ -58,6 +58,7 @@ META_LOG = Path(os.getenv("META_LOG", str(SAFE_STORAGE_DIR / "metadata.jsonl")))
 CACHE_DIR = get_robust_path(STORAGE_DIR / ".cache" / "thumbnails", "thumbnails")
 AUDIT_LOG = SAFE_STORAGE_DIR / "audit.log"
 ENV_PATH = BASE_DIR / ".env"
+RECOVERY_FILE = BASE_DIR / "vault_internal" / ".recovery_token"
 
 # Initialize Auth (ahora usa STORAGE_DIR original pero AuthManager debe ser robusto internamente)
 # No obstante, pasamos un path seguro para evitar el crash inicial
@@ -180,6 +181,15 @@ cloudflare_tunnel = None
 async def startup_event():
     # Iniciar caché de metadatos
     metadata_cache.load()
+    
+    # Generar token de recuperación local
+    try:
+        import secrets
+        RECOVERY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        RECOVERY_FILE.write_text(secrets.token_hex(16))
+    except Exception as e:
+        print(f"[*] Fallo generando token de recuperación: {e}")
+
     
     # Lanzar worker de pre-generación en segundo plano (sin esperar)
     # asyncio.create_task(pre_generate_thumbnails_worker())
@@ -440,9 +450,15 @@ async def update_config(update: ConfigUpdate):
 # --- AUTH ENDPOINTS ---
 
 @app.get("/api/auth/request")
-async def request_pairing():
-    """Generates a Master PIN for the mobile app to link. Only allowed if no admin exists."""
-    if auth.get_admins_count() > 0:
+async def request_pairing(recovery: Optional[str] = Query(None)):
+    """Generates a Master PIN for the mobile app to link. Only allowed if no admin exists or via recovery token."""
+    
+    is_recovery = False
+    if recovery and RECOVERY_FILE.exists():
+        if recovery == RECOVERY_FILE.read_text().strip():
+            is_recovery = True
+            
+    if auth.get_admins_count() > 0 and not is_recovery:
         raise HTTPException(status_code=403, detail="Admin already registered. Use App to invite.")
         
     pin = auth.generate_pin(role="admin", allowed_folders=["*"])
@@ -453,7 +469,8 @@ async def request_pairing():
     return {
         "pin": pin,
         "url": url,
-        "expires_in": 300
+        "expires_in": 300,
+        "recovered": is_recovery
     }
 
 class InviteRequest(BaseModel):

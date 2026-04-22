@@ -84,7 +84,15 @@ try:
                 config_data = resp.json()
                 remote_enabled = config_data.get("ENABLE_REMOTE_ACCESS", "false").lower() == "true"
                 
-                auth_resp = requests.get("http://localhost:8001/api/auth/request", timeout=2)
+                # Read recovery token if exists
+                recovery_param = ""
+                try:
+                    with open("vault_internal/.recovery_token", "r") as f:
+                        recovery_param = f"?recovery={f.read().strip()}"
+                except:
+                    pass
+                    
+                auth_resp = requests.get(f"http://localhost:8001/api/auth/request{recovery_param}", timeout=2)
                 
                 if auth_resp.status_code == 403:
                     print("\n" + "="*50)
@@ -103,8 +111,8 @@ try:
                     data = auth_resp.json()
                     
                     # Si el acceso remoto está activado pero la URL es local, esperamos a que Cloudflare termine
-                    is_local_url = any(x in data['url'] for x in ["localhost", "127.0.0.1", "192.168.", "10."])
-                    if remote_enabled and is_local_url and i < (max_retries - 2):
+                    is_remote_url = "trycloudflare.com" in data['url'] or "ngrok" in data['url']
+                    if remote_enabled and not is_remote_url and i < (max_retries - 2):
                         print(f"[*] El servidor está vivo pero el túnel remoto aún se está construyendo. Esperando... ({i+1}/{max_retries})")
                         time.sleep(3)
                         continue
@@ -112,6 +120,12 @@ try:
                     print("\n" + "="*50)
                     print("   ¡SISTEMA LISTO PARA CONECTAR!")
                     print("="*50)
+                    
+                    if data.get("recovered"):
+                        print("   [i] Modo Recuperación: URL de Cloudflare actualizada.")
+                        print("       Escanea este QR para volver a conectar tu móvil.")
+                        print("-" * 50)
+                        
                     print(f"   URL: {data['url']}")
                     print(f"   PIN: {data['pin']}")
                     print("="*50)
