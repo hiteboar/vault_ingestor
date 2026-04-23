@@ -72,7 +72,7 @@ export const getThumbUrl = async (item) => {
     return { uri: `${url}/api/media/thumbnail/${item.id}?token=${token}`, headers: { 'X-Device-Token': token } };
 };
 
-export const uploadFile = async (uri, name, mimeType, folder) => {
+export const uploadFile = async (uri, name, mimeType, folder, onProgress) => {
     const { url, token } = await getConnection();
     if (!url) throw new Error('Not connected');
 
@@ -84,20 +84,26 @@ export const uploadFile = async (uri, name, mimeType, folder) => {
     });
     formData.append('context', folder);
 
-    const resp = await fetch(`${url}/api/upload`, {
-        method: 'POST',
-        headers: {
-            'X-Device-Token': token,
-            'Content-Type': 'multipart/form-data',
-        },
-        body: formData,
-    });
-
-    if (!resp.ok) {
-        const txt = await resp.text();
-        throw new Error(txt || 'Upload error');
+    try {
+        const resp = await axios.post(`${url}/api/upload`, formData, {
+            headers: {
+                'X-Device-Token': token,
+                'Content-Type': 'multipart/form-data',
+            },
+            onUploadProgress: (progressEvent) => {
+                if (onProgress && progressEvent.total) {
+                    const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+                    onProgress(percentCompleted);
+                }
+            }
+        });
+        return resp.data;
+    } catch (error) {
+        if (error.response && error.response.data) {
+            throw new Error(error.response.data.detail || 'Upload error');
+        }
+        throw new Error(error.message || 'Upload error');
     }
-    return await resp.json();
 };
 
 export const verifyPin = async (baseUrl, pin) => {

@@ -60,7 +60,7 @@ export default function App() {
   const [currentFolder, setCurrentFolder] = useState('root');
   
   // Modals state
-  const [uploading, setUploading] = useState(false);
+  const [uploadState, setUploadState] = useState({ active: false, current: 0, total: 0, percent: 0 });
   const [previewItem, setPreviewItem] = useState(null);
   const [previewSrc, setPreviewSrc] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -268,19 +268,33 @@ export default function App() {
   };
 
   const handleUpload = async () => {
-    const result = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
+    const result = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true, multiple: true });
 
-    if (!result.canceled) {
-      setUploading(true);
-      try {
-          const asset = result.assets[0];
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      const assets = result.assets;
+      setUploadState({ active: true, current: 0, total: assets.length, percent: 0 });
+      
+      let successCount = 0;
+      for (let i = 0; i < assets.length; i++) {
+          const asset = assets[i];
           const filename = asset.name || asset.fileName || asset.uri.split('/').pop() || 'upload.bin';
-          await api.uploadFile(asset.uri, filename, asset.mimeType || 'application/octet-stream', currentFolder);
-          loadData();
-      } catch(e) {
-          alert('Error al subir: ' + e.message);
+          setUploadState(prev => ({ ...prev, current: i + 1, percent: 0 }));
+          
+          try {
+              await api.uploadFile(asset.uri, filename, asset.mimeType || 'application/octet-stream', currentFolder, (pct) => {
+                  setUploadState(prev => ({ ...prev, percent: pct }));
+              });
+              successCount++;
+          } catch(e) {
+              alert(`Error al subir ${filename}: ${e.message}`);
+          }
       }
-      setUploading(false);
+      
+      setUploadState({ active: false, current: 0, total: 0, percent: 0 });
+      loadData();
+      if (successCount > 0 && successCount < assets.length) {
+          alert(`Se subieron ${successCount} de ${assets.length} archivos correctamente.`);
+      }
     }
   };
 
@@ -520,9 +534,24 @@ export default function App() {
             removeClippedSubviews={true} // Mejora memoria en Android al ocultar vistas fuera de pantalla
             />
 
+            {/* Barra de progreso estática e inferior */}
+            {uploadState.active && (
+                <View style={{ position: 'absolute', bottom: 85, left: 15, right: 15, backgroundColor: '#1e293b', padding: 15, borderRadius: 12, borderWidth: 1, borderColor: '#334155', elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84 }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+                        <Text style={{ color: '#fff', fontSize: 14, fontWeight: 'bold' }}>
+                            Subiendo archivo {uploadState.current} de {uploadState.total}...
+                        </Text>
+                        <Text style={{ color: '#3b82f6', fontSize: 14, fontWeight: 'bold' }}>{uploadState.percent}%</Text>
+                    </View>
+                    <View style={{ height: 6, backgroundColor: '#334155', borderRadius: 3, overflow: 'hidden' }}>
+                        <View style={{ width: `${uploadState.percent}%`, height: '100%', backgroundColor: '#3b82f6' }} />
+                    </View>
+                </View>
+            )}
+
             {/* Subida Flotante */}
             <View style={styles.fabContainer}>
-                {uploading ? (
+                {uploadState.active ? (
                     <View style={styles.fab}><ActivityIndicator color="#fff"/></View>
                 ) : (
                     <TouchableOpacity style={styles.fab} onPress={handleUpload}>
@@ -776,12 +805,34 @@ export default function App() {
        {inviteModal && inviteData && (
             <Modal visible={true} transparent={true} animationType="slide">
                <View style={styles.modalBg}>
-                    <View style={styles.qrCard}>
-                        <Text style={styles.qrTitle}>Invitación Lista</Text>
-                        <Text style={styles.qrText}>Dile a un amigo que escanee este código o introduzca manualmente la URL y el PIN en su aplicación Vault Ingestor.</Text>
-                        <Text style={styles.qrPin}>PIN: {inviteData.pin}</Text>
-                        <TouchableOpacity style={{marginTop:30, padding: 15, backgroundColor:'#1e293b', borderRadius:8}} onPress={() => setInviteModal(false)}>
-                            <Text style={{color:'#fff', fontWeight:'bold'}}>Cerrar</Text>
+                    <View style={[styles.qrCard, { padding: 30, backgroundColor: '#0f172a', borderColor: '#334155', borderWidth: 1, alignItems: 'center' }]}>
+                        <Text style={[styles.qrTitle, { fontSize: 24, marginBottom: 10, color: '#f8fafc' }]}>Invitación Creada</Text>
+                        <Text style={[styles.qrText, { textAlign: 'center', color: '#94a3b8', marginBottom: 20, fontSize: 14 }]}>
+                            El invitado debe escanear este código o introducir los datos manualmente.
+                        </Text>
+                        
+                        <View style={{ backgroundColor: '#fff', padding: 10, borderRadius: 12, marginBottom: 20 }}>
+                            <Image 
+                                source={{ uri: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(JSON.stringify({url: inviteData.url, pin: inviteData.pin}))}` }} 
+                                style={{ width: 180, height: 180 }} 
+                                resizeMode="contain"
+                            />
+                        </View>
+
+                        <View style={{ width: '100%', backgroundColor: '#1e293b', padding: 15, borderRadius: 12, marginBottom: 20, borderColor: '#334155', borderWidth: 1 }}>
+                            <Text style={{ color: '#64748b', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 5 }}>URL del Servidor</Text>
+                            <Text style={{ color: '#60a5fa', fontSize: 16, fontWeight: '500', marginBottom: 15, textAlign: 'center' }} numberOfLines={2} adjustsFontSizeToFit>
+                                {inviteData.url}
+                            </Text>
+
+                            <Text style={{ color: '#64748b', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 5 }}>PIN de Acceso</Text>
+                            <Text style={{ color: '#10b981', fontSize: 32, fontWeight: 'bold', letterSpacing: 4, textAlign: 'center' }}>
+                                {inviteData.pin}
+                            </Text>
+                        </View>
+
+                        <TouchableOpacity style={{ width: '100%', padding: 16, backgroundColor: '#3b82f6', borderRadius: 8, alignItems: 'center' }} onPress={() => setInviteModal(false)}>
+                            <Text style={{color:'#fff', fontWeight:'bold', fontSize: 16}}>Aceptar</Text>
                         </TouchableOpacity>
                     </View>
                </View>
