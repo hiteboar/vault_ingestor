@@ -235,11 +235,20 @@ export default function App() {
       );
   };
 
-  const handleCreateFolder = () => {
+  const handleCreateFolder = async () => {
       if (!newFolderName.trim()) return;
-      setCurrentFolder(newFolderName.trim());
-      setNewFolderName('');
-      setNewFolderModal(false);
+      try {
+          setLoading(true);
+          await api.createFolder(newFolderName.trim());
+          setCurrentFolder(newFolderName.trim());
+          setNewFolderName('');
+          setNewFolderModal(false);
+          await loadData();
+      } catch (e) {
+          alert('Error al crear carpeta: ' + e.message);
+      } finally {
+          setLoading(false);
+      }
   };
   const handleBarcodeScanned = ({ type, data }) => {
     setScanned(true);
@@ -774,6 +783,41 @@ export default function App() {
                         <TouchableOpacity style={{marginTop:30, padding: 15, backgroundColor:'#1e293b', borderRadius:8}} onPress={() => setInviteModal(false)}>
                             <Text style={{color:'#fff', fontWeight:'bold'}}>Cerrar</Text>
                         </TouchableOpacity>
+                    </View>
+               </View>
+            </Modal>
+       )}
+
+       {/* New Folder Modal */}
+       {newFolderModal && (
+            <Modal visible={true} transparent={true} animationType="fade">
+               <View style={styles.modalBg}>
+                    <View style={styles.promptCard}>
+                        <Text style={styles.promptTitle}>Nueva Carpeta</Text>
+                        <Text style={styles.promptSub}>Introduce el nombre de la nueva carpeta para organizar tus archivos.</Text>
+                        
+                        <TextInput 
+                            style={[styles.input, {marginVertical: 20, width: '100%'}]} 
+                            placeholder="Nombre de la carpeta" 
+                            placeholderTextColor="#64748b" 
+                            value={newFolderName} 
+                            onChangeText={setNewFolderName} 
+                            autoCapitalize="none"
+                            autoFocus={true}
+                        />
+
+                        <View style={{flexDirection:'row', gap: 10}}>
+                            <TouchableOpacity style={[styles.button, {flex:1, backgroundColor:'#334155'}]} onPress={() => {setNewFolderModal(false); setNewFolderName('');}}>
+                                <Text style={styles.buttonText}>Cancelar</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity 
+                                style={[styles.button, {flex:1}, !newFolderName.trim() && styles.buttonDisabled]} 
+                                onPress={handleCreateFolder}
+                                disabled={!newFolderName.trim()}
+                            >
+                                <Text style={styles.buttonText}>Crear</Text>
+                            </TouchableOpacity>
+                        </View>
                     </View>
                </View>
             </Modal>

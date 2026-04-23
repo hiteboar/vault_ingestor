@@ -101,38 +101,35 @@ export const uploadFile = async (uri, name, mimeType, folder) => {
 };
 
 export const verifyPin = async (baseUrl, pin) => {
-    console.log(`[DEBUG] verifyPin called with URL: ${baseUrl} and PIN: ${pin}`);
     const url = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
-    try {
-        const resp = await axios.post(`${url}/api/auth/verify`, { pin }, {
-            timeout: 15000,
-            headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-                // Fallbacks just in case
-                'ngrok-skip-browser-warning': 'true',
-                'Bypass-Tunnel-Reminder': 'true'
-            }
-        });
-        console.log(`[DEBUG] verifyPin success! Response:`, resp.data);
-        return resp.data.token;
-    } catch (error) {
-        console.log(`[DEBUG] verifyPin error! Message:`, error.message);
-        if (error.response) {
-            console.log(`[DEBUG] Response Status:`, error.response.status);
-            // Si la respuesta es un HTML (como la advertencia de Cloudflare), esto lo mostrará
-            console.log(`[DEBUG] Response Data (first 200 chars):`, typeof error.response.data === 'string' ? error.response.data.substring(0, 200) : error.response.data);
-        } else if (error.request) {
-            console.log(`[DEBUG] Request sent but no response received.`);
-        }
-        throw error;
+    const resp = await fetch(`${url}/api/auth/verify`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        },
+        body: JSON.stringify({ pin })
+    });
+    
+    if (!resp.ok) {
+        throw new Error(`HTTP Error ${resp.status}`);
     }
+    
+    const data = await resp.json();
+    return data.token;
 };
 
 export const deleteItem = async (itemId) => {
     const client = await getClient();
     if (!client) throw new Error('Not connected');
     const resp = await client.delete(`/api/items/${itemId}`);
+    return resp.data;
+};
+
+export const createFolder = async (folderName) => {
+    const client = await getClient();
+    if (!client) throw new Error('Not connected');
+    const resp = await client.post(`/api/folders`, { name: folderName });
     return resp.data;
 };
 

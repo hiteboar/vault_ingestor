@@ -498,12 +498,9 @@ async def create_invite(data: InviteRequest, x_device_token: str = Header(...)):
 @app.post("/api/auth/verify")
 async def verify_pairing(data: PinVerify):
     """Verifies a PIN and returns a permanent device token."""
-    print(f"[DEBUG_AUTH] verify_pairing called with PIN: {data.pin}")
     token = auth.verify_pin(data.pin)
     if not token:
-        print("[DEBUG_AUTH] verify_pairing FAILED - Invalid or expired PIN")
         raise HTTPException(status_code=400, detail="Invalid or expired PIN")
-    print(f"[DEBUG_AUTH] verify_pairing SUCCESS - Token generated")
     return {"token": token}
 
 @app.get("/api/auth/me")
@@ -800,6 +797,32 @@ async def delete_item(item_id: str, x_device_token: str = Header(...)):
         log_audit("DELETE_ITEM", Path(target_item["saved_path"]), device)
 
         return {"status": "success", "message": "Item deleted"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class FolderNameRequest(BaseModel):
+    name: str
+
+@app.post("/api/folders")
+async def create_folder(req: FolderNameRequest, x_device_token: str = Header(...)):
+    """Creates a new empty folder (Admin only)."""
+    device = auth.get_device_info(x_device_token)
+    if not device or device.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can create folders")
+        
+    folder_name = req.name.strip()
+    if not folder_name or folder_name.lower() == "root":
+        raise HTTPException(status_code=400, detail="Invalid folder name")
+        
+    try:
+        base_upload = STORAGE_DIR / "uploaded_files"
+        folder_path = base_upload / folder_name
+        folder_path.mkdir(parents=True, exist_ok=True)
+        
+        # Log Audit
+        log_audit("CREATE_FOLDER", folder_path, device)
+        
+        return {"status": "success", "message": f"Folder {folder_name} created"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
