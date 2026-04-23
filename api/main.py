@@ -492,7 +492,7 @@ async def create_invite(data: InviteRequest, x_device_token: str = Header(...)):
         "pin": pin,
         "url": url,
         "expires_in": 300,
-        "folder": data.folder
+        "folders": data.folders
     }
 
 @app.post("/api/auth/verify")
