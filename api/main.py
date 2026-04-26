@@ -344,6 +344,9 @@ async def get_folders_meta(x_device_token: str = Header(...)):
             folder_name = item.name
             if role == "admin" or folder_name in allowed_folders or "*" in allowed_folders:
                 meta_file = item / ".meta.json"
+                if not meta_file.exists():
+                    update_folder_meta(folder_name)
+                    
                 if meta_file.exists():
                     try:
                         with open(meta_file, "r", encoding="utf-8") as f:

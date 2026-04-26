@@ -361,7 +361,8 @@ export default function App() {
       }
       
       const isTimeline = currentFolder === 'root';
-      const rowItemWidth = isTimeline ? (width - 70) / COLUMN_COUNT - 10 : width / COLUMN_COUNT - 10;
+      const availableWidth = isTimeline ? width - 10 - 60 : width - 10;
+      const rowItemWidth = Math.floor(availableWidth / COLUMN_COUNT) - 10;
       
       return (
           <View style={[styles.rowContainer, isTimeline && { marginLeft: 10 }]}>
