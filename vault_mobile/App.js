@@ -58,6 +58,9 @@ export default function App() {
   const [status, setStatus] = useState(null);
   const [role, setRole] = useState('standard');
   const [currentFolder, setCurrentFolder] = useState('root');
+  const [foldersMeta, setFoldersMeta] = useState({});
+  const [sortMode, setSortMode] = useState('time');
+  const [showSortMenu, setShowSortMenu] = useState(false);
   
   // Modals state
   const [uploadState, setUploadState] = useState({ active: false, current: 0, total: 0, percent: 0 });
@@ -121,9 +124,10 @@ export default function App() {
           setCurrentFolder(me.allowed_folders[0]);
       }
 
-      const [itemsList, sysStatus] = await Promise.all([
+      const [itemsList, sysStatus, fMeta] = await Promise.all([
         api.fetchItems(),
-        api.fetchStatus()
+        api.fetchStatus(),
+        api.fetchFoldersMeta().catch(() => ({}))
       ]);
       
       const uniqueMap = new Map();
@@ -133,6 +137,7 @@ export default function App() {
       
       setItems(Array.from(uniqueMap.values()));
       setStatus(sysStatus);
+      setFoldersMeta(fMeta || {});
       setLastUpdated(new Date());
       setError('');
     } catch (e) {
@@ -345,12 +350,150 @@ export default function App() {
       }
   };
 
-  const renderThumbnail = ({ item }) => {
-      // Usar useState hook interno para source es complejo. Lo ideal es montar un componente, pero como getThumbUrl 
-      // devuelve un URI condicionado por promesas, vamos a construir la source aquí apoyándonos en que 
-      // lo resolvimos parcialmente, o mejor aún, construimos la URI directamente si ya conocemos la url base.
-      // Para evitar renders asíncronos lentos, pre-procesaremos las items en el futuro. Por ahora usamos useEffect.
-      return <Thumbnail item={item} onPress={() => openPreview(item)} />;
+  const renderRow = ({ item: row }) => {
+      if (row.type === 'type_marker') {
+          return (
+              <View style={styles.typeMarkerContainer}>
+                  <Text style={styles.typeMarkerText}>{row.label}</Text>
+                  <View style={styles.typeMarkerLine} />
+              </View>
+          );
+      }
+      
+      const isTimeline = currentFolder === 'root';
+      const rowItemWidth = isTimeline ? (width - 70) / COLUMN_COUNT - 10 : width / COLUMN_COUNT - 10;
+      
+      return (
+          <View style={[styles.rowContainer, isTimeline && { marginLeft: 10 }]}>
+              {isTimeline && (
+                  <View style={styles.sideMarkerContainer}>
+                      {row.sideMarker ? (
+                          <View style={styles.sideMarkerContent}>
+                              <View style={styles.sideMarkerDot} />
+                              <Text style={styles.sideMarkerText}>{row.sideMarker}</Text>
+                              <View style={styles.sideMarkerLine} />
+                          </View>
+                      ) : (
+                          <View style={[styles.sideMarkerLine, { height: '100%', marginTop: 0 }]} />
+                      )}
+                  </View>
+              )}
+              <View style={styles.rowItemsContainer}>
+                  {row.items.map((item, index) => {
+                      if (item.isFolder) {
+                          return (
+                              <TouchableOpacity 
+                                  key={item.id} 
+                                  style={[styles.folderCard, { width: rowItemWidth, height: rowItemWidth }]}
+                                  onPress={() => setCurrentFolder(item.name)}
+                              >
+                                  <MaterialCommunityIcons name="folder-multiple" size={32} color="#3b82f6" />
+                                  <Text style={styles.folderCardTitle} numberOfLines={1}>{item.name}</Text>
+                                  <Text style={styles.folderCardSub}>
+                                      {item.date_range?.newest ? item.date_range.newest.split('T')[0] : ''}
+                                  </Text>
+                              </TouchableOpacity>
+                          );
+                      } else {
+                          return (
+                              <Thumbnail 
+                                  key={item.id}
+                                  item={item} 
+                                  onPress={() => openPreview(item)} 
+                                  customWidth={rowItemWidth}
+                              />
+                          );
+                      }
+                  })}
+              </View>
+          </View>
+      );
+  };
+
+  const getProcessedItems = () => {
+      let filtered = items.filter(i => {
+          if (currentFolder === 'root') {
+              if (i.context !== 'root') return false;
+              if (selectedYear !== 'All') {
+                  if (!i.timestamp.startsWith(selectedYear)) return false;
+              }
+              return true;
+          }
+          return i.context === currentFolder;
+      });
+
+      if (currentFolder === 'root') {
+          Object.keys(foldersMeta).forEach(fName => {
+              const meta = foldersMeta[fName];
+              if (meta && meta.date_range && meta.date_range.newest) {
+                  if (selectedYear === 'All' || meta.date_range.newest.startsWith(selectedYear)) {
+                      filtered.push({
+                          id: `folder-${fName}`,
+                          isFolder: true,
+                          name: fName,
+                          timestamp: meta.date_range.newest,
+                          date_range: meta.date_range
+                      });
+                  }
+              }
+          });
+      }
+
+      if (sortMode === 'time' || currentFolder === 'root') {
+          filtered.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+      } else if (sortMode === 'type') {
+          filtered.sort((a, b) => {
+              const extA = (a.name || '').split('.').pop().toLowerCase();
+              const extB = (b.name || '').split('.').pop().toLowerCase();
+              return extA.localeCompare(extB);
+          });
+      }
+      
+      let rows = [];
+      let currentGroup = null;
+      let currentRow = [];
+      let pendingMarker = null;
+
+      filtered.forEach((item) => {
+          let itemGroup = null;
+          
+          if (currentFolder === 'root') {
+             const dateStr = item.timestamp || '';
+             itemGroup = dateStr.substring(0, 7); 
+          } else if (sortMode === 'type') {
+             itemGroup = (item.name || '').split('.').pop().toLowerCase() || 'otros';
+          }
+
+          if (itemGroup !== null && itemGroup !== currentGroup) {
+              if (currentRow.length > 0) {
+                  rows.push({ type: 'row', id: `row-${rows.length}`, items: currentRow, sideMarker: pendingMarker });
+                  currentRow = [];
+                  pendingMarker = null;
+              }
+              
+              if (currentFolder === 'root') {
+                  const [y, m] = itemGroup.split('-');
+                  const monthNames = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+                  pendingMarker = `${monthNames[parseInt(m, 10)-1] || ''}\n${y}`;
+              } else {
+                  rows.push({ type: 'type_marker', id: `marker-${rows.length}`, label: itemGroup.toUpperCase() });
+              }
+              currentGroup = itemGroup;
+          }
+
+          currentRow.push(item);
+          if (currentRow.length === COLUMN_COUNT) {
+              rows.push({ type: 'row', id: `row-${rows.length}`, items: currentRow, sideMarker: pendingMarker });
+              currentRow = [];
+              pendingMarker = null;
+          }
+      });
+      
+      if (currentRow.length > 0) {
+          rows.push({ type: 'row', id: `row-${rows.length}`, items: currentRow, sideMarker: pendingMarker });
+      }
+
+      return rows;
   };
 
   if (loading && !connected) {
@@ -488,14 +631,36 @@ export default function App() {
                 </View>
             )}
 
-            {/* Folder Actions (Delete) */}
-            {currentFolder !== 'root' && role === 'admin' && (
+            {/* Folder Actions (Delete & Sort) */}
+            {currentFolder !== 'root' && (
                 <View style={styles.folderActions}>
-                    <Text style={styles.folderPathText}>Gestionando: {currentFolder}</Text>
-                    <TouchableOpacity onPress={handleDeleteFolder} style={styles.deleteFolderBtn}>
-                        <MaterialCommunityIcons name="trash-can-outline" size={18} color="#ef4444" />
-                        <Text style={styles.deleteFolderText}> Eliminar Carpeta</Text>
-                    </TouchableOpacity>
+                    <View style={{flexDirection: 'row', alignItems: 'center', zIndex: 50}}>
+                        <Text style={styles.folderPathText}>Gestionando: {currentFolder}</Text>
+                        <TouchableOpacity style={styles.sortMenuBtn} onPress={() => setShowSortMenu(!showSortMenu)}>
+                            <MaterialCommunityIcons name="sort" size={16} color="#94a3b8" />
+                            <Text style={styles.sortMenuBtnText}> Ordenar</Text>
+                        </TouchableOpacity>
+                        
+                        {showSortMenu && (
+                            <View style={styles.sortMenuDropdown}>
+                                <TouchableOpacity style={styles.sortMenuItem} onPress={() => { setSortMode('time'); setShowSortMenu(false); }}>
+                                    <MaterialCommunityIcons name={sortMode === 'time' ? 'check' : 'blank'} size={16} color="#3b82f6" style={{marginRight: 5}}/>
+                                    <Text style={[styles.sortMenuItemText, sortMode === 'time' && {color: '#3b82f6'}]}>Por tiempo</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={styles.sortMenuItem} onPress={() => { setSortMode('type'); setShowSortMenu(false); }}>
+                                    <MaterialCommunityIcons name={sortMode === 'type' ? 'check' : 'blank'} size={16} color="#3b82f6" style={{marginRight: 5}}/>
+                                    <Text style={[styles.sortMenuItemText, sortMode === 'type' && {color: '#3b82f6'}]}>Por tipo</Text>
+                                </TouchableOpacity>
+                            </View>
+                        )}
+                    </View>
+                    
+                    {role === 'admin' && (
+                        <TouchableOpacity onPress={handleDeleteFolder} style={styles.deleteFolderBtn}>
+                            <MaterialCommunityIcons name="trash-can-outline" size={18} color="#ef4444" />
+                            <Text style={styles.deleteFolderText}> Eliminar Carpeta</Text>
+                        </TouchableOpacity>
+                    )}
                 </View>
             )}
         </View>
@@ -507,24 +672,11 @@ export default function App() {
         <View style={{ flex: 1 }}>
 
             <FlatList 
-            data={items.filter(i => {
-                // Folder logic:
-                // 1. If searching for root, show everything with context root (date-organized)
-                if (currentFolder === 'root') {
-                    if (i.context !== 'root') return false;
-                    // Apply year filter
-                    if (selectedYear !== 'All') {
-                        if (!i.timestamp.startsWith(selectedYear)) return false;
-                    }
-                    return true;
-                }
-                // 2. Otherwise, match by context (named folder)
-                return i.context === currentFolder;
-            })}
-            numColumns={COLUMN_COUNT}
+            data={getProcessedItems()}
+            numColumns={1}
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.gallery}
-            renderItem={renderThumbnail}
+            renderItem={renderRow}
             ListEmptyComponent={<Text style={{color:'#64748b', textAlign:'center', marginTop: 50}}>No hay archivos en esta carpeta</Text>}
             // OPTIMIZACIONES DE RENDIMIENTO
             windowSize={7} // Renderiza 3 pantallas arriba/abajo del viewport
@@ -879,7 +1031,7 @@ export default function App() {
 }
 
 // Componente helper para cargar thmbnails resolviendo sus Headers
-function Thumbnail({ item, onPress }) {
+function Thumbnail({ item, onPress, customWidth }) {
     const [src, setSrc] = useState(null);
     const [failed, setFailed] = useState(false);
     
@@ -906,7 +1058,7 @@ function Thumbnail({ item, onPress }) {
 
     if (failed || !src) {
         return (
-            <TouchableOpacity style={styles.imageContainer} onPress={onPress}>
+            <TouchableOpacity style={[styles.imageContainer, customWidth && { width: customWidth, height: customWidth }]} onPress={onPress}>
                 <View style={styles.filePlaceholder}>
                     <Text style={styles.fileIcon}>{isVideo ? '🎬' : '📄'}</Text>
                     <Text style={styles.fileNameText} numberOfLines={2}>{item.name}</Text>
@@ -916,7 +1068,7 @@ function Thumbnail({ item, onPress }) {
     }
 
     return (
-        <TouchableOpacity style={styles.imageContainer} onPress={onPress}>
+        <TouchableOpacity style={[styles.imageContainer, customWidth && { width: customWidth, height: customWidth }]} onPress={onPress}>
             <Image 
                 source={src} 
                 style={styles.thumbnail} 
@@ -1025,5 +1177,29 @@ const styles = StyleSheet.create({
   folderSelectItem: { flexDirection:'row', justifyContent:'space-between', padding: 15, backgroundColor: '#0f172a', borderRadius: 8, marginBottom: 8 },
   folderSelectItemActive: { backgroundColor: '#3b82f6' },
   folderSelectItemText: { color: '#94a3b8' },
-  folderSelectItemTextActive: { color: '#fff', fontWeight: 'bold' }
+  folderSelectItemTextActive: { color: '#fff', fontWeight: 'bold' },
+  
+  // New Styles for Timeline & Folders
+  typeMarkerContainer: { flexDirection: 'row', alignItems: 'center', width: '100%', paddingHorizontal: 15, marginVertical: 15 },
+  typeMarkerText: { color: '#64748b', fontSize: 12, fontWeight: 'bold', marginRight: 10, backgroundColor: '#0f172a', paddingRight: 10 },
+  typeMarkerLine: { flex: 1, height: 1, backgroundColor: '#1e293b' },
+  
+  rowContainer: { flexDirection: 'row', width: '100%' },
+  rowItemsContainer: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-start' },
+  
+  sideMarkerContainer: { width: 45, alignItems: 'center', marginRight: 5 },
+  sideMarkerContent: { alignItems: 'center', height: '100%' },
+  sideMarkerDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#3b82f6', marginTop: 15 },
+  sideMarkerText: { color: '#94a3b8', fontSize: 10, fontWeight: 'bold', marginTop: 5, textAlign: 'center' },
+  sideMarkerLine: { width: 2, flex: 1, backgroundColor: '#1e293b', marginTop: 5 },
+  
+  folderCard: { margin: 5, borderRadius: 8, backgroundColor: '#1e293b', borderWidth: 1, borderColor: '#334155', justifyContent: 'center', alignItems: 'center', padding: 5 },
+  folderCardTitle: { color: '#fff', fontSize: 12, fontWeight: 'bold', marginTop: 5, textAlign: 'center' },
+  folderCardSub: { color: '#64748b', fontSize: 9, marginTop: 2 },
+  
+  sortMenuBtn: { flexDirection: 'row', alignItems: 'center', marginLeft: 15, backgroundColor: '#1e293b', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, borderWidth: 1, borderColor: '#334155' },
+  sortMenuBtnText: { color: '#94a3b8', fontSize: 11, fontWeight: 'bold' },
+  sortMenuDropdown: { position: 'absolute', top: 30, left: 100, backgroundColor: '#1e293b', borderRadius: 8, borderWidth: 1, borderColor: '#334155', padding: 5, zIndex: 100, elevation: 10, shadowColor: '#000', shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.3, shadowRadius: 4 },
+  sortMenuItem: { flexDirection: 'row', alignItems: 'center', padding: 10, minWidth: 120 },
+  sortMenuItemText: { color: '#cbd5e1', fontSize: 12, fontWeight: 'bold' }
 });

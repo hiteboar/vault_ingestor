@@ -257,6 +257,46 @@ class PinVerify(BaseModel):
 class FolderCreate(BaseModel):
     name: str
 
+def update_folder_meta(folder_name: str):
+    if folder_name == "root":
+        return
+    base_upload = STORAGE_DIR / "uploaded_files"
+    folder_path = base_upload / folder_name
+    if not folder_path.exists() or not META_LOG.exists():
+        return
+    
+    timestamps = []
+    try:
+        with open(META_LOG, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    item = json.loads(line)
+                    if item.get("context") == folder_name:
+                        ts = item.get("timestamp")
+                        if ts and Path(item.get("saved_path", "")).exists():
+                            timestamps.append(ts)
+    except Exception as e:
+        print(f"[META] Error reading META_LOG for folder {folder_name}: {e}")
+        return
+
+    if timestamps:
+        timestamps.sort()
+        meta_data = {
+            "date_range": {
+                "oldest": timestamps[0],
+                "newest": timestamps[-1]
+            }
+        }
+    else:
+        meta_data = {"date_range": None}
+        
+    meta_file = folder_path / ".meta.json"
+    try:
+        with open(meta_file, "w", encoding="utf-8") as f:
+            json.dump(meta_data, f)
+    except Exception as e:
+        print(f"[META] Error writing .meta.json: {e}")
+
 @app.get("/api/folders")
 async def list_folders(x_device_token: str = Header(...)):
     """Devuelve la lista de carpetas disponibles en el almacenamiento."""
@@ -283,6 +323,35 @@ async def list_folders(x_device_token: str = Header(...)):
                 folders.append(folder_name)
                 
     return sorted(list(set(folders)))
+
+@app.get("/api/folders/meta")
+async def get_folders_meta(x_device_token: str = Header(...)):
+    """Devuelve la metainformación de todas las carpetas disponibles para el usuario."""
+    device = auth.get_device_info(x_device_token)
+    if not device:
+        raise HTTPException(status_code=401, detail="Invalid token")
+        
+    role = device.get("role", "standard")
+    allowed_folders = device.get("allowed_folders", [])
+    
+    base_upload = STORAGE_DIR / "uploaded_files"
+    if not base_upload.exists():
+        return {}
+        
+    meta_dict = {}
+    for item in base_upload.iterdir():
+        if item.is_dir():
+            folder_name = item.name
+            if role == "admin" or folder_name in allowed_folders or "*" in allowed_folders:
+                meta_file = item / ".meta.json"
+                if meta_file.exists():
+                    try:
+                        with open(meta_file, "r", encoding="utf-8") as f:
+                            meta_dict[folder_name] = json.load(f)
+                    except Exception:
+                        pass
+                        
+    return meta_dict
 
 @app.post("/api/folders")
 async def create_folder(data: FolderCreate, x_device_token: str = Header(...)):
@@ -741,6 +810,8 @@ async def upload_file(
         # Sincronizar Cache en RAM
         metadata_cache.update(item)
             
+        update_folder_meta(context)
+            
         # Log Audit
         log_audit("UPLOAD", file_path, device)
             
@@ -792,6 +863,9 @@ async def delete_item(item_id: str, x_device_token: str = Header(...)):
 
         # 4. Sincronizar Cache en RAM
         metadata_cache.remove(item_id)
+        
+        if target_item.get("context"):
+            update_folder_meta(target_item.get("context"))
 
         # Log Audit
         log_audit("DELETE_ITEM", Path(target_item["saved_path"]), device)
