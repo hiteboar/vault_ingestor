@@ -760,6 +760,7 @@ async def get_media_file(path: str, x_device_token: Optional[str] = Header(None)
 async def upload_file(
     file: UploadFile = File(...), 
     context: str = Form("root"),
+    original_date: Optional[str] = Form(None),
     x_device_token: str = Header(...)
 ):
     """Securely uploads a file from the mobile app."""
@@ -799,11 +800,46 @@ async def upload_file(
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
+        # Determine final timestamp
+        final_timestamp = None
+        
+        # 1. Try EXIF for images
+        if file.filename.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
+            try:
+                from PIL import Image as PILImage
+                from PIL.ExifTags import TAGS
+                with PILImage.open(file_path) as img:
+                    exif = img.getexif()
+                    if exif:
+                        for tag_id, value in exif.items():
+                            tag = TAGS.get(tag_id, tag_id)
+                            if tag == 'DateTimeOriginal' and value:
+                                try:
+                                    dt = datetime.strptime(str(value).strip(), "%Y:%m:%d %H:%M:%S")
+                                    final_timestamp = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+                                    break
+                                except:
+                                    pass
+            except Exception as e:
+                print(f"[EXIF_ERROR] {e}")
+                
+        # 2. Try client-provided original date
+        if not final_timestamp and original_date:
+            try:
+                if "T" in original_date:
+                    final_timestamp = original_date
+            except:
+                pass
+                
+        # 3. Fallback to current time
+        if not final_timestamp:
+            final_timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
         item = {
             "id": secrets.token_hex(8),
             "name": file.filename,
             "saved_path": str(file_path),
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "timestamp": final_timestamp,
             "source": "mobile",
             "context": context
         }

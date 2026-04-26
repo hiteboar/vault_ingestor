@@ -79,7 +79,7 @@ export const getThumbUrl = async (item) => {
     return { uri: `${url}/api/media/thumbnail/${item.id}?token=${token}`, headers: { 'X-Device-Token': token } };
 };
 
-export const uploadFile = async (uri, name, mimeType, folder, onProgress) => {
+export const uploadFile = async (uri, name, mimeType, folder, originalDate, onProgress) => {
     const { url, token } = await getConnection();
     if (!url) throw new Error('Not connected');
 
@@ -90,6 +90,9 @@ export const uploadFile = async (uri, name, mimeType, folder, onProgress) => {
         type: mimeType
     });
     formData.append('context', folder);
+    if (originalDate) {
+        formData.append('original_date', originalDate);
+    }
 
     try {
         const resp = await axios.post(`${url}/api/upload`, formData, {

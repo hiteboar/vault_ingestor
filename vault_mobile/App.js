@@ -286,7 +286,12 @@ export default function App() {
           setUploadState(prev => ({ ...prev, current: i + 1, percent: 0 }));
           
           try {
-              await api.uploadFile(asset.uri, filename, asset.mimeType || 'application/octet-stream', currentFolder, (pct) => {
+              const fileInfo = await FileSystem.getInfoAsync(asset.uri);
+              const originalDate = fileInfo.modificationTime 
+                  ? new Date(fileInfo.modificationTime * 1000).toISOString()
+                  : null;
+                  
+              await api.uploadFile(asset.uri, filename, asset.mimeType || 'application/octet-stream', currentFolder, originalDate, (pct) => {
                   setUploadState(prev => ({ ...prev, percent: pct }));
               });
               successCount++;
