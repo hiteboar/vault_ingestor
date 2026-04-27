@@ -12,7 +12,8 @@ import {
   StatusBar,
   Dimensions,
   Modal,
-  Alert
+  Alert,
+  PanResponder
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -68,6 +69,9 @@ export default function App() {
   const [previewSrc, setPreviewSrc] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState(null);
+  const [showInfo, setShowInfo] = useState(false);
+  const [fileInfo, setFileInfo] = useState(null);
+  const [infoLoading, setInfoLoading] = useState(false);
   const [inviteModal, setInviteModal] = useState(false);
   const [inviteData, setInviteData] = useState(null);
   const [newFolderModal, setNewFolderModal] = useState(false);
@@ -313,6 +317,7 @@ export default function App() {
     setPreviewSrc(null);
     setPreviewLoading(true);
     setPreviewError(null);
+    setShowInfo(false);
     try {
         const src = await api.getMediaUrl(item);
         setPreviewSrc(src);
@@ -331,6 +336,53 @@ export default function App() {
         alert('Error al descargar: ' + e.message);
     }
   };
+
+  const handleNext = () => {
+      if (!previewItem) return;
+      const flat = getProcessedItems().flatMap(r => r.type === 'row' ? r.items : []).filter(i => !i.isFolder);
+      const idx = flat.findIndex(i => i.id === previewItem.id);
+      if (idx !== -1 && idx < flat.length - 1) {
+          openPreview(flat[idx + 1]);
+      }
+  };
+
+  const handlePrev = () => {
+      if (!previewItem) return;
+      const flat = getProcessedItems().flatMap(r => r.type === 'row' ? r.items : []).filter(i => !i.isFolder);
+      const idx = flat.findIndex(i => i.id === previewItem.id);
+      if (idx > 0) {
+          openPreview(flat[idx - 1]);
+      }
+  };
+
+  const loadFileInfo = async () => {
+      setShowInfo(true);
+      setInfoLoading(true);
+      try {
+          const info = await api.fetchItemInfo(previewItem.id);
+          setFileInfo(info);
+      } catch (e) {
+          alert('Error al obtener información: ' + e.message);
+      } finally {
+          setInfoLoading(false);
+      }
+  };
+
+  const panResponder = React.useRef(
+      PanResponder.create({
+          onStartShouldSetPanResponder: () => false,
+          onMoveShouldSetPanResponder: (evt, gestureState) => {
+              return Math.abs(gestureState.dx) > 20;
+          },
+          onPanResponderRelease: (evt, gestureState) => {
+              if (gestureState.dx > 50) {
+                  handlePrev();
+              } else if (gestureState.dx < -50) {
+                  handleNext();
+              }
+          }
+      })
+  ).current;
 
   const handleCreateInvite = async () => {
       try {
@@ -766,11 +818,18 @@ export default function App() {
       {/* Preview Modal */}
       {previewItem && (
           <Modal visible={true} transparent={true} animationType="fade" onRequestClose={() => setPreviewItem(null)}>
-              <View style={styles.modalBg}>
+              <View style={styles.modalBg} {...panResponder.panHandlers}>
                   <TouchableOpacity style={styles.modalClose} onPress={() => setPreviewItem(null)}>
                       <Text style={styles.modalCloseText}>Cerrar</Text>
                   </TouchableOpacity>
                   
+                  <TouchableOpacity style={styles.navBtnLeft} onPress={handlePrev}>
+                      <MaterialCommunityIcons name="chevron-left" size={40} color="#fff" />
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.navBtnRight} onPress={handleNext}>
+                      <MaterialCommunityIcons name="chevron-right" size={40} color="#fff" />
+                  </TouchableOpacity>
+
                   {/* File Preview Logic */}
                   {(() => {
                       if (previewLoading && !previewSrc && !previewError) {
@@ -858,11 +917,57 @@ export default function App() {
                       >
                           <MaterialCommunityIcons name="download" size={24} color="#fff" />
                       </TouchableOpacity>
+                      <TouchableOpacity style={styles.modalActionCircle} onPress={loadFileInfo}>
+                          <MaterialCommunityIcons name="information-variant" size={24} color="#fff" />
+                      </TouchableOpacity>
                       {role === 'admin' && (
                           <TouchableOpacity style={[styles.modalActionCircle, {backgroundColor: '#ef4444'}]} onPress={handleDeleteItem}>
                                <MaterialCommunityIcons name="trash-can-outline" size={24} color="#fff" />
                           </TouchableOpacity>
                       )}
+                  </View>
+              </View>
+          </Modal>
+      )}
+
+      {/* Info Modal */}
+      {showInfo && (
+          <Modal visible={true} transparent={true} animationType="slide" onRequestClose={() => setShowInfo(false)}>
+              <View style={styles.modalBg}>
+                  <View style={styles.promptCard}>
+                      <Text style={styles.promptTitle}>Información del Archivo</Text>
+                      {infoLoading ? (
+                          <ActivityIndicator size="large" color="#3b82f6" />
+                      ) : fileInfo ? (
+                          <View style={{ gap: 15, marginBottom: 20 }}>
+                              <View>
+                                  <Text style={styles.infoLabel}>Nombre</Text>
+                                  <Text style={styles.infoValue}>{fileInfo.name}</Text>
+                              </View>
+                              <View>
+                                  <Text style={styles.infoLabel}>Tamaño</Text>
+                                  <Text style={styles.infoValue}>{formatBytes(fileInfo.size)}</Text>
+                              </View>
+                              <View>
+                                  <Text style={styles.infoLabel}>Fecha</Text>
+                                  <Text style={styles.infoValue}>
+                                      {fileInfo.timestamp ? fileInfo.timestamp.replace('T', ' ').replace('Z', '') : 'Desconocida'}
+                                  </Text>
+                              </View>
+                              {fileInfo.gps && (
+                                  <View>
+                                      <Text style={styles.infoLabel}>Ubicación GPS</Text>
+                                      <Text style={styles.infoValue}>Lat: {fileInfo.gps.lat.toFixed(6)}, Lon: {fileInfo.gps.lon.toFixed(6)}</Text>
+                                  </View>
+                              )}
+                          </View>
+                      ) : (
+                          <Text style={{color: '#ef4444'}}>No se pudo cargar la información.</Text>
+                      )}
+                      
+                      <TouchableOpacity style={[styles.button, {width: '100%'}]} onPress={() => setShowInfo(false)}>
+                          <Text style={styles.buttonText}>Cerrar Info</Text>
+                      </TouchableOpacity>
                   </View>
               </View>
           </Modal>
@@ -1207,5 +1312,11 @@ const styles = StyleSheet.create({
   sortMenuBtnText: { color: '#94a3b8', fontSize: 11, fontWeight: 'bold' },
   sortMenuDropdown: { position: 'absolute', top: 30, left: 100, backgroundColor: '#1e293b', borderRadius: 8, borderWidth: 1, borderColor: '#334155', padding: 5, zIndex: 100, elevation: 10, shadowColor: '#000', shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.3, shadowRadius: 4 },
   sortMenuItem: { flexDirection: 'row', alignItems: 'center', padding: 10, minWidth: 120 },
-  sortMenuItemText: { color: '#cbd5e1', fontSize: 12, fontWeight: 'bold' }
+  sortMenuItemText: { color: '#cbd5e1', fontSize: 12, fontWeight: 'bold' },
+  
+  // Navigation & Info Styles
+  navBtnLeft: { position: 'absolute', left: 10, top: '45%', zIndex: 10, padding: 10, backgroundColor: 'rgba(30, 41, 59, 0.6)', borderRadius: 30 },
+  navBtnRight: { position: 'absolute', right: 10, top: '45%', zIndex: 10, padding: 10, backgroundColor: 'rgba(30, 41, 59, 0.6)', borderRadius: 30 },
+  infoLabel: { color: '#64748b', fontSize: 12, textTransform: 'uppercase', fontWeight: 'bold', marginBottom: 2 },
+  infoValue: { color: '#fff', fontSize: 16 }
 });

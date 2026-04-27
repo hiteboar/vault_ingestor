@@ -436,6 +436,83 @@ async def get_items(x_device_token: str = Header(...)):
     
     return list(reversed(items))
 
+@app.get("/api/items/{item_id}/info")
+async def get_item_info(item_id: str, x_device_token: str = Header(...)):
+    device = auth.get_device_info(x_device_token)
+    if not device:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    saved_path_str = metadata_cache.get_path(item_id)
+    if not saved_path_str:
+        raise HTTPException(status_code=404, detail="Item not found in cache")
+        
+    orig_path = Path(saved_path_str)
+    if not orig_path.exists():
+        raise HTTPException(status_code=404, detail="Original file missing")
+        
+    info = {
+        "id": item_id,
+        "name": orig_path.name,
+        "size": orig_path.stat().st_size,
+        "gps": None,
+        "timestamp": None
+    }
+    
+    ext = orig_path.suffix.lower()
+    
+    try:
+        if ext in {".jpg", ".jpeg", ".png", ".webp"}:
+            from PIL import Image as PILImage
+            from PIL.ExifTags import TAGS, GPSTAGS
+            with PILImage.open(orig_path) as img:
+                exif = img._getexif()
+                if exif:
+                    for tag_id, value in exif.items():
+                        tag = TAGS.get(tag_id, tag_id)
+                        if tag == 'DateTimeOriginal' and value:
+                            info["timestamp"] = str(value)
+                    
+                    gps_info = {}
+                    if 34853 in exif: # GPSInfo
+                        for key, val in exif[34853].items():
+                            decode = GPSTAGS.get(key, key)
+                            gps_info[decode] = val
+                    if "GPSLatitude" in gps_info and "GPSLongitude" in gps_info:
+                        def parse_dms(dms, ref):
+                            dec = float(dms[0]) + float(dms[1])/60 + float(dms[2])/3600
+                            return -dec if ref in ['S', 'W'] else dec
+                        try:
+                            lat = parse_dms(gps_info["GPSLatitude"], gps_info.get("GPSLatitudeRef", "N"))
+                            lon = parse_dms(gps_info["GPSLongitude"], gps_info.get("GPSLongitudeRef", "E"))
+                            info["gps"] = {"lat": lat, "lon": lon}
+                        except Exception as e:
+                            print(f"Error parsing GPS: {e}")
+        elif ext in {".mp4", ".mov", ".avi", ".mkv"}:
+            import subprocess
+            import re
+            cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", str(orig_path)]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                meta = json.loads(result.stdout)
+                tags = meta.get("format", {}).get("tags", {})
+                
+                if "creation_time" in tags:
+                    info["timestamp"] = tags["creation_time"]
+                    
+                loc = tags.get("location") or tags.get("com.apple.quicktime.location.ISO6709")
+                if loc:
+                    match = re.search(r'([+-]\d+\.\d+)([+-]\d+\.\d+)', str(loc))
+                    if match:
+                        info["gps"] = {"lat": float(match.group(1)), "lon": float(match.group(2))}
+    except Exception as e:
+        print(f"[INFO_ERROR] Could not extract metadata for {orig_path.name}: {e}")
+
+    if not info["timestamp"]:
+        import time
+        info["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(orig_path.stat().st_mtime))
+
+    return info
+
 @app.get("/api/system/status")
 async def get_system_status():
     """Returns disk usage, RAM, and CPU info."""

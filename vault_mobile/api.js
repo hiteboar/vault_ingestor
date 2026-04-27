@@ -67,6 +67,13 @@ export const fetchFoldersMeta = async () => {
     return resp.data;
 };
 
+export const fetchItemInfo = async (itemId) => {
+    const client = await getClient();
+    if (!client) throw new Error('Not connected');
+    const resp = await client.get(`/api/items/${itemId}/info`);
+    return resp.data;
+};
+
 export const getMediaUrl = async (item) => {
     const { url, token } = await getConnection();
     const encodedPath = item.web_path.split('/').map(segment => encodeURIComponent(segment)).join('/');
