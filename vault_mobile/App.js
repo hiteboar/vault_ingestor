@@ -1295,12 +1295,12 @@ const styles = StyleSheet.create({
   typeMarkerText: { color: '#64748b', fontSize: 12, fontWeight: 'bold', marginRight: 10, backgroundColor: '#0f172a', paddingRight: 10 },
   typeMarkerLine: { flex: 1, height: 1, backgroundColor: '#1e293b' },
   
-  rowContainer: { flexDirection: 'row', width: '100%' },
-  rowItemsContainer: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-start' },
+  rowContainer: { flexDirection: 'row' },
+  rowItemsContainer: { flex: 1, flexDirection: 'row', justifyContent: 'flex-start' },
   
   sideMarkerContainer: { width: 45, alignItems: 'center', marginRight: 5 },
   sideMarkerContent: { alignItems: 'center', height: '100%' },
-  sideMarkerDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#3b82f6', marginTop: 15 },
+  sideMarkerDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#3b82f6', marginTop: 10 },
   sideMarkerText: { color: '#94a3b8', fontSize: 10, fontWeight: 'bold', marginTop: 5, textAlign: 'center' },
   sideMarkerLine: { width: 2, flex: 1, backgroundColor: '#1e293b', marginTop: 5 },
   

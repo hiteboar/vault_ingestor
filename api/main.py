@@ -13,6 +13,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import io
+import time
+from datetime import datetime
 from PIL import Image as PILImage, ImageOps
 
 from core.auth import AuthManager
@@ -116,6 +118,50 @@ def log_audit(action: str, path: Path, device_info: dict):
             f.write(json.dumps(entry) + "\n")
     except Exception as e:
         print(f"[AUDIT_ERROR] {e}")
+
+def extract_timestamp(file_path: Path) -> str:
+    """Extrae la fecha más precisa posible de un archivo y la devuelve en formato ISO."""
+    ext = file_path.suffix.lower()
+    
+    # 1. Intentar EXIF para imágenes
+    if ext in {".jpg", ".jpeg", ".png", ".webp"}:
+        try:
+            from PIL.ExifTags import TAGS
+            with PILImage.open(file_path) as img:
+                exif = img._getexif()
+                if exif:
+                    for tag_id, value in exif.items():
+                        tag = TAGS.get(tag_id, tag_id)
+                        if tag == 'DateTimeOriginal' and value:
+                            try:
+                                # El formato EXIF suele ser "YYYY:MM:DD HH:MM:SS"
+                                dt = datetime.strptime(str(value).strip(), "%Y:%m:%d %H:%M:%S")
+                                return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+                            except:
+                                pass
+        except:
+            pass
+            
+    # 2. Intentar FFprobe para vídeos
+    elif ext in {".mp4", ".mov", ".avi", ".mkv", ".webm"}:
+        try:
+            import subprocess
+            cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(file_path)]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                meta = json.loads(result.stdout)
+                creation_time = meta.get("format", {}).get("tags", {}).get("creation_time")
+                if creation_time:
+                    return creation_time
+        except:
+            pass
+            
+    # 3. Fallback a fecha de modificación del sistema
+    try:
+        mtime = file_path.stat().st_mtime
+        return datetime.fromtimestamp(mtime).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except:
+        return datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
 
 class MetadataManager:
     def __init__(self):
@@ -459,6 +505,7 @@ async def get_item_info(item_id: str, x_device_token: str = Header(...)):
     }
     
     ext = orig_path.suffix.lower()
+    info["timestamp"] = extract_timestamp(orig_path)
     
     try:
         if ext in {".jpg", ".jpeg", ".png", ".webp"}:
@@ -470,7 +517,7 @@ async def get_item_info(item_id: str, x_device_token: str = Header(...)):
                     for tag_id, value in exif.items():
                         tag = TAGS.get(tag_id, tag_id)
                         if tag == 'DateTimeOriginal' and value:
-                            info["timestamp"] = str(value)
+                            pass
                     
                     gps_info = {}
                     if 34853 in exif: # GPSInfo
@@ -496,9 +543,6 @@ async def get_item_info(item_id: str, x_device_token: str = Header(...)):
                 meta = json.loads(result.stdout)
                 tags = meta.get("format", {}).get("tags", {})
                 
-                if "creation_time" in tags:
-                    info["timestamp"] = tags["creation_time"]
-                    
                 loc = tags.get("location") or tags.get("com.apple.quicktime.location.ISO6709")
                 if loc:
                     match = re.search(r'([+-]\d+\.\d+)([+-]\d+\.\d+)', str(loc))
@@ -506,10 +550,6 @@ async def get_item_info(item_id: str, x_device_token: str = Header(...)):
                         info["gps"] = {"lat": float(match.group(1)), "lon": float(match.group(2))}
     except Exception as e:
         print(f"[INFO_ERROR] Could not extract metadata for {orig_path.name}: {e}")
-
-    if not info["timestamp"]:
-        import time
-        info["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(orig_path.stat().st_mtime))
 
     return info
 
@@ -877,40 +917,13 @@ async def upload_file(
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
-        # Determine final timestamp
-        final_timestamp = None
+        # Determine final timestamp using the new consistent function
+        final_timestamp = extract_timestamp(file_path)
         
-        # 1. Try EXIF for images
-        if file.filename.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
-            try:
-                from PIL import Image as PILImage
-                from PIL.ExifTags import TAGS
-                with PILImage.open(file_path) as img:
-                    exif = img.getexif()
-                    if exif:
-                        for tag_id, value in exif.items():
-                            tag = TAGS.get(tag_id, tag_id)
-                            if tag == 'DateTimeOriginal' and value:
-                                try:
-                                    dt = datetime.strptime(str(value).strip(), "%Y:%m:%d %H:%M:%S")
-                                    final_timestamp = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-                                    break
-                                except:
-                                    pass
-            except Exception as e:
-                print(f"[EXIF_ERROR] {e}")
-                
-        # 2. Try client-provided original date
-        if not final_timestamp and original_date:
-            try:
-                if "T" in original_date:
-                    final_timestamp = original_date
-            except:
-                pass
-                
-        # 3. Fallback to current time
-        if not final_timestamp:
-            final_timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        # If client provided an original date, we might prefer it if extraction failed 
+        # but extract_timestamp already falls back to mtime. 
+        # We'll use client date only if it looks more "original" than current time?
+        # Actually, let's stick to the extraction for consistency.
 
         item = {
             "id": secrets.token_hex(8),
