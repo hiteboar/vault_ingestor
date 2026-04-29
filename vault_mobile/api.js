@@ -109,7 +109,7 @@ export const uploadFile = async (uri, name, mimeType, folder, originalDate, onPr
             },
             onUploadProgress: (progressEvent) => {
                 if (onProgress && progressEvent.total) {
-                    const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+                    const percentCompleted = Math.min(100, Math.round((progressEvent.loaded * 100) / progressEvent.total));
                     onProgress(percentCompleted);
                 }
             }

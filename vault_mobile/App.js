@@ -64,6 +64,7 @@ export default function App() {
   const [showSortMenu, setShowSortMenu] = useState(false);
   
   // Modals state
+  const [uploadMenuVisible, setUploadMenuVisible] = useState(false);
   const [uploadState, setUploadState] = useState({ active: false, current: 0, total: 0, percent: 0 });
   const [previewItem, setPreviewItem] = useState(null);
   const [previewSrc, setPreviewSrc] = useState(null);
@@ -276,14 +277,13 @@ export default function App() {
     }
   };
 
-  const handleUpload = async () => {
-    const result = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true, multiple: true });
+  const processUploads = async (assets) => {
+      setUploadMenuVisible(false);
+      if (!assets || assets.length === 0) return;
 
-    if (!result.canceled && result.assets && result.assets.length > 0) {
-      const assets = result.assets;
       setUploadState({ active: true, current: 0, total: assets.length, percent: 0 });
-      
       let successCount = 0;
+      
       for (let i = 0; i < assets.length; i++) {
           const asset = assets[i];
           const filename = asset.name || asset.fileName || asset.uri.split('/').pop() || 'upload.bin';
@@ -295,7 +295,7 @@ export default function App() {
                   ? new Date(fileInfo.modificationTime * 1000).toISOString()
                   : null;
                   
-              await api.uploadFile(asset.uri, filename, asset.mimeType || 'application/octet-stream', currentFolder, originalDate, (pct) => {
+              await api.uploadFile(asset.uri, filename, asset.mimeType || asset.type || 'application/octet-stream', currentFolder, originalDate, (pct) => {
                   setUploadState(prev => ({ ...prev, percent: pct }));
               });
               successCount++;
@@ -309,6 +309,23 @@ export default function App() {
       if (successCount > 0 && successCount < assets.length) {
           alert(`Se subieron ${successCount} de ${assets.length} archivos correctamente.`);
       }
+  };
+
+  const handlePickDocument = async () => {
+    const result = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true, multiple: true });
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      processUploads(result.assets);
+    }
+  };
+
+  const handlePickMedia = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      allowsMultipleSelection: true,
+      quality: 1,
+    });
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      processUploads(result.assets);
     }
   };
 
@@ -761,10 +778,26 @@ export default function App() {
 
             {/* Subida Flotante */}
             <View style={styles.fabContainer}>
+                {uploadMenuVisible && (
+                    <View style={styles.uploadMenu}>
+                        <TouchableOpacity style={styles.uploadMenuItem} onPress={handlePickDocument}>
+                            <MaterialCommunityIcons name="file-outline" size={20} color="#fff" />
+                            <Text style={styles.uploadMenuText}>Archivos</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.uploadMenuItem} onPress={handlePickMedia}>
+                            <MaterialCommunityIcons name="image-outline" size={20} color="#fff" />
+                            <Text style={styles.uploadMenuText}>Imágenes / Videos</Text>
+                        </TouchableOpacity>
+                    </View>
+                )}
+                
                 {uploadState.active ? (
                     <View style={styles.fab}><ActivityIndicator color="#fff"/></View>
                 ) : (
-                    <TouchableOpacity style={styles.fab} onPress={handleUpload}>
+                    <TouchableOpacity 
+                        style={[styles.fab, uploadMenuVisible && { backgroundColor: '#ef4444', transform: [{ rotate: '45deg' }] }]} 
+                        onPress={() => setUploadMenuVisible(!uploadMenuVisible)}
+                    >
                         <MaterialCommunityIcons name="plus" size={32} color="#fff" />
                     </TouchableOpacity>
                 )}
@@ -1318,5 +1351,9 @@ const styles = StyleSheet.create({
   navBtnLeft: { position: 'absolute', left: 10, top: '45%', zIndex: 10, padding: 10, backgroundColor: 'rgba(30, 41, 59, 0.6)', borderRadius: 30 },
   navBtnRight: { position: 'absolute', right: 10, top: '45%', zIndex: 10, padding: 10, backgroundColor: 'rgba(30, 41, 59, 0.6)', borderRadius: 30 },
   infoLabel: { color: '#64748b', fontSize: 12, textTransform: 'uppercase', fontWeight: 'bold', marginBottom: 2 },
-  infoValue: { color: '#fff', fontSize: 16 }
+  infoValue: { color: '#fff', fontSize: 16 },
+  
+  uploadMenu: { position: 'absolute', bottom: 70, right: 0, backgroundColor: '#1e293b', borderRadius: 12, padding: 8, borderWidth: 1, borderColor: '#334155', elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84, minWidth: 160 },
+  uploadMenuItem: { flexDirection: 'row', alignItems: 'center', padding: 12, gap: 10 },
+  uploadMenuText: { color: '#fff', fontSize: 14, fontWeight: '500' },
 });
