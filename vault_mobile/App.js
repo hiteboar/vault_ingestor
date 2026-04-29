@@ -291,8 +291,10 @@ export default function App() {
           
           try {
               const fileInfo = await FileSystem.getInfoAsync(asset.uri);
-              const originalDate = fileInfo.modificationTime 
-                  ? new Date(fileInfo.modificationTime * 1000).toISOString()
+              // Prioritize asset.creationTime (from ImagePicker) then fileInfo.modificationTime
+              const rawTimestamp = asset.creationTime || fileInfo.modificationTime;
+              const originalDate = rawTimestamp 
+                  ? new Date(rawTimestamp * (rawTimestamp > 1e11 ? 1 : 1000)).toISOString()
                   : null;
                   
               await api.uploadFile(asset.uri, filename, asset.mimeType || asset.type || 'application/octet-stream', currentFolder, originalDate, (pct) => {

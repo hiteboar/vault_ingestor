@@ -122,20 +122,25 @@ def log_audit(action: str, path: Path, device_info: dict):
 def extract_timestamp(file_path: Path) -> str:
     """Extrae la fecha más precisa posible de un archivo y la devuelve en formato ISO."""
     ext = file_path.suffix.lower()
+    filename = file_path.name
     
     # 1. Intentar EXIF para imágenes
     if ext in {".jpg", ".jpeg", ".png", ".webp"}:
         try:
+            from PIL import Image as PILImage
             from PIL.ExifTags import TAGS
             with PILImage.open(file_path) as img:
                 exif = img._getexif()
                 if exif:
+                    # Buscar etiquetas de fecha comunes
                     for tag_id, value in exif.items():
                         tag = TAGS.get(tag_id, tag_id)
-                        if tag == 'DateTimeOriginal' and value:
+                        if tag in ('DateTimeOriginal', 'DateTime', 'DateTimeDigitized') and value:
                             try:
                                 # El formato EXIF suele ser "YYYY:MM:DD HH:MM:SS"
-                                dt = datetime.strptime(str(value).strip(), "%Y:%m:%d %H:%M:%S")
+                                # Pero a veces tiene caracteres raros o nulos al final
+                                date_str = str(value).strip().replace('\x00', '')
+                                dt = datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
                                 return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
                             except:
                                 pass
@@ -150,13 +155,28 @@ def extract_timestamp(file_path: Path) -> str:
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode == 0:
                 meta = json.loads(result.stdout)
-                creation_time = meta.get("format", {}).get("tags", {}).get("creation_time")
+                tags = meta.get("format", {}).get("tags", {})
+                # Probar varias etiquetas de creación
+                creation_time = tags.get("creation_time") or tags.get("com.apple.quicktime.creationdate")
                 if creation_time:
                     return creation_time
         except:
             pass
             
-    # 3. Fallback a fecha de modificación del sistema (en UTC)
+    # 3. Intentar extraer de nombre de archivo (Patrón: YYYYMMDD o YYYY-MM-DD)
+    # Común en móviles: IMG_20230515_... o VID_20230515_...
+    import re
+    date_match = re.search(r'(\d{4})[-_]?(\d{2})[-_]?(\d{2})', filename)
+    if date_match:
+        try:
+            year, month, day = date_match.groups()
+            # Verificar que parezca una fecha razonable
+            if 1990 <= int(year) <= 2100 and 1 <= int(month) <= 12 and 1 <= int(day) <= 31:
+                return f"{year}-{month}-{day}T12:00:00Z"
+        except:
+            pass
+
+    # 4. Fallback a fecha de modificación del sistema (en UTC)
     try:
         mtime = file_path.stat().st_mtime
         return datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
