@@ -480,7 +480,9 @@ async def get_items(x_device_token: str = Header(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
-    return list(reversed(items))
+    # Sort by timestamp (newest first)
+    items.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    return items
 
 @app.get("/api/items/{item_id}/info")
 async def get_item_info(item_id: str, x_device_token: str = Header(...)):

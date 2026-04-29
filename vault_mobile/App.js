@@ -27,7 +27,7 @@ import { AppState } from 'react-native';
 
 const { width, height } = Dimensions.get('window');
 const COLUMN_COUNT = 3;
-const ITEM_WIDTH = width / COLUMN_COUNT - 10;
+const ITEM_WIDTH = width / COLUMN_COUNT - 4;
 
 // Utility to format sizes
 const formatBytes = (bytes, decimals = 2) => {
@@ -418,11 +418,11 @@ export default function App() {
       }
       
       const isTimeline = currentFolder === 'root';
-      const availableWidth = isTimeline ? width - 10 - 60 : width - 10;
-      const rowItemWidth = Math.floor(availableWidth / COLUMN_COUNT) - 10;
+      const availableWidth = isTimeline ? width - 4 - 60 : width - 4;
+      const rowItemWidth = Math.floor(availableWidth / COLUMN_COUNT) - 4;
       
       return (
-          <View style={[styles.rowContainer, isTimeline && { marginLeft: 10 }]}>
+          <View style={[styles.rowContainer, isTimeline && { marginLeft: 10 }, { height: rowItemWidth + 4 }]}>
               {isTimeline && (
                   <View style={styles.sideMarkerContainer}>
                       {row.sideMarker ? (
@@ -432,7 +432,7 @@ export default function App() {
                               <View style={styles.sideMarkerLine} />
                           </View>
                       ) : (
-                          <View style={[styles.sideMarkerLine, { height: '100%', marginTop: 0 }]} />
+                          <View style={styles.sideMarkerLine} />
                       )}
                   </View>
               )}
@@ -1223,8 +1223,8 @@ const styles = StyleSheet.create({
   folderPathText: { color: '#64748b', fontSize: 11 },
   deleteFolderBtn: { padding: 5 },
   deleteFolderText: { color: '#ef4444', fontSize: 11, fontWeight: 'bold' },
-  gallery: { padding: 5, paddingBottom: 100 },
-  imageContainer: { margin: 5, width: ITEM_WIDTH, height: ITEM_WIDTH, borderRadius: 8, overflow: 'hidden', backgroundColor: '#1e293b' },
+  gallery: { padding: 2, paddingBottom: 100 },
+  imageContainer: { margin: 2, width: ITEM_WIDTH, height: ITEM_WIDTH, borderRadius: 8, overflow: 'hidden', backgroundColor: '#1e293b' },
   thumbnail: { width: '100%', height: '100%' },
   statsContainer: { padding: 20, gap: 15 },
   statCard: { backgroundColor: '#1e293b', padding: 20, borderRadius: 16, borderWidth: 1, borderColor: '#334155' },
@@ -1299,12 +1299,12 @@ const styles = StyleSheet.create({
   rowItemsContainer: { flex: 1, flexDirection: 'row', justifyContent: 'flex-start' },
   
   sideMarkerContainer: { width: 45, alignItems: 'center', marginRight: 5 },
-  sideMarkerContent: { alignItems: 'center', height: '100%' },
+  sideMarkerContent: { alignItems: 'center', flex: 1 },
   sideMarkerDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#3b82f6', marginTop: 10 },
   sideMarkerText: { color: '#94a3b8', fontSize: 10, fontWeight: 'bold', marginTop: 5, textAlign: 'center' },
   sideMarkerLine: { width: 2, flex: 1, backgroundColor: '#1e293b', marginTop: 5 },
   
-  folderCard: { margin: 5, borderRadius: 8, backgroundColor: '#1e293b', borderWidth: 1, borderColor: '#334155', justifyContent: 'center', alignItems: 'center', padding: 5 },
+  folderCard: { margin: 2, borderRadius: 8, backgroundColor: '#1e293b', borderWidth: 1, borderColor: '#334155', justifyContent: 'center', alignItems: 'center', padding: 5 },
   folderCardTitle: { color: '#fff', fontSize: 12, fontWeight: 'bold', marginTop: 5, textAlign: 'center' },
   folderCardSub: { color: '#64748b', fontSize: 9, marginTop: 2 },
   
