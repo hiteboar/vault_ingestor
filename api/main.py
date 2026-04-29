@@ -535,9 +535,33 @@ async def get_item_info(item_id: str, x_device_token: str = Header(...)):
         "timestamp": item_meta.get("timestamp")
     }
     
-    # If timestamp is missing in meta, try to extract it
-    if not info["timestamp"]:
-        info["timestamp"] = extract_timestamp(orig_path)
+    # Always try a fresh extraction to ensure the most accurate date is shown
+    # (This restores the "working" behavior the user mentioned)
+    fresh_ts = extract_timestamp(orig_path)
+    
+    # If the fresh extraction is different from what we had in meta, update the log/cache
+    if fresh_ts and fresh_ts != item_meta.get("timestamp"):
+        item_meta["timestamp"] = fresh_ts
+        metadata_cache.update(item_meta)
+        
+        # Update the log file immediately
+        try:
+            remaining_lines = []
+            with open(META_LOG, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        m = json.loads(line)
+                        if m.get("id") == item_id:
+                            m["timestamp"] = fresh_ts
+                            remaining_lines.append(json.dumps(m) + "\n")
+                        else:
+                            remaining_lines.append(line)
+            with open(META_LOG, "w", encoding="utf-8") as f:
+                f.writelines(remaining_lines)
+        except:
+            pass
+            
+    info["timestamp"] = fresh_ts or item_meta.get("timestamp")
     
     try:
         if ext in {".jpg", ".jpeg", ".png", ".webp"}:
