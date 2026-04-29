@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import io
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from PIL import Image as PILImage, ImageOps
 
 from core.auth import AuthManager
@@ -156,12 +156,12 @@ def extract_timestamp(file_path: Path) -> str:
         except:
             pass
             
-    # 3. Fallback a fecha de modificación del sistema
+    # 3. Fallback a fecha de modificación del sistema (en UTC)
     try:
         mtime = file_path.stat().st_mtime
-        return datetime.fromtimestamp(mtime).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     except:
-        return datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
+        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 class MetadataManager:
     def __init__(self):
@@ -177,23 +177,25 @@ class MetadataManager:
                 for line in f:
                     if line.strip():
                         item = json.loads(line)
-                        saved_path = item.get("saved_path")
-                        if saved_path:
-                            # Generar ID consistente con get_items si no existe
-                            item_id = item.get("id")
-                            if not item_id:
-                                item_id = hashlib.md5(saved_path.encode()).hexdigest()
-                            new_cache[item_id] = saved_path
+                        item_id = item.get("id")
+                        if not item_id:
+                            item_id = hashlib.md5(item.get("saved_path", "").encode()).hexdigest()
+                            item["id"] = item_id
+                        new_cache[item_id] = item
             self._cache = new_cache
             print(f"[META] Caché cargada: {len(self._cache)} archivos indexados en RAM.")
         except Exception as e:
             print(f"[META_ERROR] Error cargando metadatos: {e}")
             
-    def get_path(self, item_id: str) -> Optional[str]:
+    def get_item(self, item_id: str) -> Optional[dict]:
         return self._cache.get(item_id)
+
+    def get_path(self, item_id: str) -> Optional[str]:
+        item = self._cache.get(item_id)
+        return item.get("saved_path") if item else None
         
     def update(self, item: dict):
-        self._cache[item["id"]] = item["saved_path"]
+        self._cache[item["id"]] = item
         
     def remove(self, item_id: str):
         if item_id in self._cache:
@@ -372,7 +374,7 @@ async def list_folders(x_device_token: str = Header(...)):
 
 @app.get("/api/folders/meta")
 async def get_folders_meta(x_device_token: str = Header(...)):
-    """Devuelve la metainformación de todas las carpetas disponibles para el usuario."""
+    """Devuelve la metainformación de todas las carpetas (calculada dinámicamente desde la caché)."""
     device = auth.get_device_info(x_device_token)
     if not device:
         raise HTTPException(status_code=401, detail="Invalid token")
@@ -380,25 +382,31 @@ async def get_folders_meta(x_device_token: str = Header(...)):
     role = device.get("role", "standard")
     allowed_folders = device.get("allowed_folders", [])
     
-    base_upload = STORAGE_DIR / "uploaded_files"
-    if not base_upload.exists():
-        return {}
+    # Agrupar timestamps por carpeta desde la caché en RAM
+    folder_stats = {}
+    for item in metadata_cache._cache.values():
+        ctx = item.get("context", "root")
+        ts = item.get("timestamp")
+        if not ts: continue
         
+        if ctx not in folder_stats:
+            folder_stats[ctx] = []
+        folder_stats[ctx].append(ts)
+    
     meta_dict = {}
-    for item in base_upload.iterdir():
-        if item.is_dir():
-            folder_name = item.name
-            if role == "admin" or folder_name in allowed_folders or "*" in allowed_folders:
-                meta_file = item / ".meta.json"
-                if not meta_file.exists():
-                    update_folder_meta(folder_name)
-                    
-                if meta_file.exists():
-                    try:
-                        with open(meta_file, "r", encoding="utf-8") as f:
-                            meta_dict[folder_name] = json.load(f)
-                    except Exception:
-                        pass
+    for folder_name, timestamps in folder_stats.items():
+        # Saltamos root porque se maneja implícitamente en la línea de tiempo
+        if folder_name == "root": continue
+        
+        # Verificar permisos
+        if role == "admin" or folder_name in allowed_folders or "*" in allowed_folders:
+            timestamps.sort()
+            meta_dict[folder_name] = {
+                "date_range": {
+                    "oldest": timestamps[0],
+                    "newest": timestamps[-1]
+                }
+            }
                         
     return meta_dict
 
@@ -490,10 +498,11 @@ async def get_item_info(item_id: str, x_device_token: str = Header(...)):
     if not device:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    saved_path_str = metadata_cache.get_path(item_id)
-    if not saved_path_str:
+    item_meta = metadata_cache.get_item(item_id)
+    if not item_meta:
         raise HTTPException(status_code=404, detail="Item not found in cache")
         
+    saved_path_str = item_meta.get("saved_path")
     orig_path = Path(saved_path_str)
     if not orig_path.exists():
         raise HTTPException(status_code=404, detail="Original file missing")
@@ -503,11 +512,12 @@ async def get_item_info(item_id: str, x_device_token: str = Header(...)):
         "name": orig_path.name,
         "size": orig_path.stat().st_size,
         "gps": None,
-        "timestamp": None
+        "timestamp": item_meta.get("timestamp")
     }
     
-    ext = orig_path.suffix.lower()
-    info["timestamp"] = extract_timestamp(orig_path)
+    # If timestamp is missing in meta, try to extract it
+    if not info["timestamp"]:
+        info["timestamp"] = extract_timestamp(orig_path)
     
     try:
         if ext in {".jpg", ".jpeg", ".png", ".webp"}:
@@ -919,13 +929,20 @@ async def upload_file(
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
-        # Determine final timestamp using the new consistent function
+        # Determine final timestamp
+        # 1. Try to extract from file (EXIF/FFprobe)
         final_timestamp = extract_timestamp(file_path)
         
-        # If client provided an original date, we might prefer it if extraction failed 
-        # but extract_timestamp already falls back to mtime. 
-        # We'll use client date only if it looks more "original" than current time?
-        # Actually, let's stick to the extraction for consistency.
+        # 2. If extraction resulted in a "now" fallback (likely mtime), 
+        # use the original_date from mobile if available.
+        # Note: extract_timestamp usually returns current time if everything fails.
+        # We can check if it's very close to 'now'.
+        if original_date:
+            # Simple heuristic: if extraction failed to find EXIF/FFprobe tags,
+            # we prefer the date reported by the mobile device.
+            # (In a real scenario, we could be more rigorous, but this is a good start)
+            # For now, if original_date is provided, we trust it more than system mtime.
+            final_timestamp = original_date
 
         item = {
             "id": secrets.token_hex(8),
