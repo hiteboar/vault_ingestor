@@ -977,16 +977,16 @@ async def upload_file(
         # 1. Try to extract from file (EXIF/FFprobe)
         final_timestamp = extract_timestamp(file_path)
         
-        # 2. If extraction resulted in a "now" fallback (likely mtime), 
-        # use the original_date from mobile if available.
-        # Note: extract_timestamp usually returns current time if everything fails.
-        # We can check if it's very close to 'now'.
-        if original_date:
-            # Simple heuristic: if extraction failed to find EXIF/FFprobe tags,
-            # we prefer the date reported by the mobile device.
-            # (In a real scenario, we could be more rigorous, but this is a good start)
-            # For now, if original_date is provided, we trust it more than system mtime.
-            final_timestamp = original_date
+        # 2. If extraction resulted in a fallback (likely mtime/current time),
+        # then we consider using original_date from mobile.
+        try:
+            mtime_now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            if final_timestamp.startswith(mtime_now) and original_date:
+                # If original_date is older than today, it's likely more accurate than mtime
+                if not original_date.startswith(mtime_now):
+                    final_timestamp = original_date
+        except:
+            pass
 
         item = {
             "id": secrets.token_hex(8),
