@@ -16,7 +16,7 @@ class AuthManager:
         try:
             self.state_dir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
-            print(f"[AUTH_ERROR] No se pudo crear directorio de estado: {e}")
+            print(f"[AUTH_ERROR] Could not create state directory: {e}")
         
         # Load linked devices: {token: {device_info, linked_at}}
         self.linked_devices = self._load(self.state_file)

@@ -1,20 +1,20 @@
 #!/bin/bash
-# Script de lanzamiento y configuración rápida para Vault Ingestor en Raspberry Pi
+# Launch and quick config script for Vault Ingestor on Raspberry Pi
 
-# Asegurar que operamos en el directorio del proyecto
+# Ensure we operate in the project directory
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_DIR" || exit
 
 echo "=========================================="
-echo "   Vault Ingestor: Sistema de Almacenaje"
-echo "   Fecha: $(date)"
+echo "   Vault Ingestor: Storage System"
+echo "   Date: $(date)"
 echo "=========================================="
 
-echo "[*] Preparando permisos del sistema..."
+echo "[*] Preparing system permissions..."
 sudo chown -R $USER:$USER "$PROJECT_DIR"
 sudo chmod -R 775 "$PROJECT_DIR"
 
-# Leer STORAGE_DIR del .env si existe
+# Read STORAGE_DIR from .env if it exists
 STORAGE_DIR="./vault_storage"
 if [ -f ".env" ]; then
     ENV_STORAGE=$(grep "^STORAGE_DIR=" .env | cut -d '=' -f2)
@@ -23,44 +23,44 @@ if [ -f ".env" ]; then
     fi
 fi
 
-# Intentar dar permisos al STORAGE_DIR (Ruta absoluta o relativa)
+# Try to apply permissions to STORAGE_DIR (Absolute or relative path)
 case "$STORAGE_DIR" in
-    /*) ;; # Es absoluta, la dejamos igual
-    *) STORAGE_DIR="$PROJECT_DIR/$STORAGE_DIR" ;; # Es relativa
+    /*) ;; # It's absolute, leave it as is
+    *) STORAGE_DIR="$PROJECT_DIR/$STORAGE_DIR" ;; # It's relative
 esac
 
 if [ -d "$STORAGE_DIR" ]; then
-    echo "[*] Aplicando permisos a la carpeta de almacenamiento configurada: $STORAGE_DIR"
+    echo "[*] Applying permissions to configured storage folder: $STORAGE_DIR"
     sudo chown -R $USER:$USER "$STORAGE_DIR" 2>/dev/null
     sudo chmod -R 775 "$STORAGE_DIR" 2>/dev/null
 fi
 
-# Permisos disco externo
+# External disk permissions
 if [ -d "/mnt/vault" ]; then
-    echo "[*] Aplicando permisos a disco externo detectado en /mnt/vault..."
+    echo "[*] Applying permissions to detected external disk in /mnt/vault..."
     sudo chown -R $USER:$USER "/mnt/vault" 2>/dev/null
     sudo chmod -R 775 "/mnt/vault" 2>/dev/null
 fi
 
-echo "[*] Gestionando el servicio vault_ingestor..."
+echo "[*] Managing vault_ingestor service..."
 SERVICE_NAME="vault_ingestor"
 
 if systemctl list-unit-files | grep -q "$SERVICE_NAME"; then
     if systemctl is-active --quiet "$SERVICE_NAME"; then
-        echo "[*] El servicio ya estaba corriendo. Reiniciando para aplicar posibles cambios..."
+        echo "[*] Service was already running. Restarting to apply changes..."
         sudo systemctl restart "$SERVICE_NAME"
     else
-        echo "[*] Iniciando el servicio..."
+        echo "[*] Starting service..."
         sudo systemctl start "$SERVICE_NAME"
     fi
 else
-    echo "[!] Advertencia: El servicio systemd ($SERVICE_NAME) no está instalado."
-    echo "[*] Iniciando en segundo plano de forma manual..."
+    echo "[!] Warning: systemd service ($SERVICE_NAME) is not installed."
+    echo "[*] Starting manually in the background..."
     pkill -f "python.*app.py" 2>/dev/null
     nohup .venv/bin/python app.py >> "$PROJECT_DIR/app.log" 2>&1 &
 fi
 
-echo "[*] Esperando a que el sistema esté listo (Cloudflare Tunnel)..."
+echo "[*] Waiting for the system to be ready (Cloudflare Tunnel)..."
 sleep 6
 
 if [ -f ".venv/bin/python" ]; then
@@ -74,7 +74,7 @@ import requests
 import json
 import time
 
-print("\n[*] Consultando datos de emparejamiento...")
+print("\n[*] Fetching pairing data...")
 try:
     max_retries = 15
     for i in range(max_retries):
@@ -96,34 +96,34 @@ try:
                 
                 if auth_resp.status_code == 403:
                     print("\n" + "="*50)
-                    print("   [!] DISPOSITIVO ADMINISTRADOR YA VINCULADO")
+                    print("   [!] ADMIN DEVICE ALREADY LINKED")
                     print("="*50)
-                    print("   Ya tienes un móvil emparejado como administrador.")
-                    print("   Si deseas invitar a más usuarios, hazlo desde la App.")
-                    print("\n   ¿Has perdido el acceso en tu móvil principal?")
-                    print("   Para reiniciar las vinculaciones, ejecuta este comando:")
+                    print("   You already have a mobile device paired as admin.")
+                    print("   If you want to invite more users, do it from the App.")
+                    print("\n   Lost access on your primary mobile?")
+                    print("   To reset linkings, run this command:")
                     print("   rm -rf /mnt/vault/.vault/devices.json")
-                    print("   (O busca el archivo .vault/devices.json en tu STORAGE_DIR)")
+                    print("   (Or look for the .vault/devices.json file in your STORAGE_DIR)")
                     print("="*50)
                     break
                     
                 elif auth_resp.status_code == 200:
                     data = auth_resp.json()
                     
-                    # Si el acceso remoto está activado pero la URL es local, esperamos a que Cloudflare termine
-                    is_remote_url = "trycloudflare.com" in data['url'] or "ngrok" in data['url']
+                    # Detect if the URL is remote (not local)
+                    is_remote_url = not any(local in data['url'] for local in ["localhost", "127.0.0.1", "192.168.", "10."])
                     if remote_enabled and not is_remote_url and i < (max_retries - 2):
-                        print(f"[*] El servidor está vivo pero el túnel remoto aún se está construyendo. Esperando... ({i+1}/{max_retries})")
+                        print(f"[*] Server is alive but remote tunnel is still being established. Waiting... ({i+1}/{max_retries})")
                         time.sleep(3)
                         continue
                         
                     print("\n" + "="*50)
-                    print("   ¡SISTEMA LISTO PARA CONECTAR!")
+                    print("   SYSTEM READY TO CONNECT!")
                     print("="*50)
                     
                     if data.get("recovered"):
-                        print("   [i] Modo Recuperación: URL de Cloudflare actualizada.")
-                        print("       Escanea este QR para volver a conectar tu móvil.")
+                        print("   [i] Recovery Mode: Cloudflare URL updated.")
+                        print("       Scan this QR to reconnect your mobile.")
                         print("-" * 50)
                         
                     print(f"   URL: {data['url']}")
@@ -136,19 +136,18 @@ try:
                         qr.add_data(json.dumps({"url": data["url"], "pin": data["pin"]}))
                         qr.print_ascii(invert=True)
                     except:
-                        print("[!] No se pudo generar el QR de texto. Usa los datos de arriba.")
+                        print("[!] Could not generate text QR. Use the data above.")
                     
                     break
         except Exception:
             time.sleep(2)
     else:
-        print("[!] Tiempo de espera agotado. El servicio podría estar tardando en iniciar.")
-        print("[*] Revisa 'app.log' para más detalles.")
+        print("[!] Timeout. The service might be taking too long to start.")
+        print("[*] Check 'app.log' for more details.")
 except Exception as e:
-    print(f"[!] Error conectando con la API: {e}")
+    print(f"[!] Error connecting to API: {e}")
 EOF
 
 echo ""
-echo "[*] La terminal ya no está bloqueada. El sistema sigue corriendo en segundo plano."
-echo "[*] Puedes cerrar esta ventana."
-
+echo "[*] Terminal is no longer blocked. The system continues running in the background."
+echo "[*] You can close this window."

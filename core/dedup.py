@@ -16,8 +16,8 @@ def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
 
 class HashIndex:
     """
-    Índice simple hash -> ruta guardada en JSON.
-    Para MVP es suficiente. Si crece, migramos a SQLite.
+    Simple index hash -> path stored in JSON.
+    For MVP it's enough. If it grows, we migrate to SQLite.
     """
     def __init__(self, path: Path):
         self.path = path

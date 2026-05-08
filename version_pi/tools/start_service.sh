@@ -1,17 +1,17 @@
 #!/bin/bash
-# Script depreciado - Ahora toda la lógica está unificada
+# Deprecated script - Now all logic is unified
 
 echo "=========================================================="
-echo " [!] AVISO: Este script ha sido actualizado y unificado."
+echo " [!] NOTICE: This script has been updated and unified."
 echo "=========================================================="
 echo ""
-echo "El sistema de arranque antiguo ha sido reemplazado por un "
-echo "lanzador mucho más robusto que gestiona automáticamente:"
-echo "  - Corrección de permisos (discos y carpetas)"
-echo "  - Reinicio seguro del servicio systemd"
-echo "  - Generación del Código QR en consola"
+echo "The old startup system has been replaced by a much more "
+echo "robust launcher that automatically manages:"
+echo "  - Permission correction (disks and folders)"
+echo "  - Secure restart of the systemd service"
+echo "  - QR Code generation in console"
 echo ""
-echo "👉 Por favor, utiliza el script principal en la raíz:"
-echo "    ./ejecutar_vault.sh"
+echo "👉 Please use the main script in the root:"
+echo "    ./run_vault.sh"
 echo ""
 echo "=========================================================="

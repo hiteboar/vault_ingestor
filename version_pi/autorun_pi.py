@@ -41,9 +41,9 @@ import threading
 def check_for_updates():
     logging.info("Checking for updates on MobileApp_prod branch...")
     try:
-        # Comprobar la conexión descargando metadatos. Retorna código de error si no hay wifi/internet
+        # Check connection by fetching metadata. Returns error code if no wifi/internet
         subprocess.run(["git", "fetch", "origin", "MobileApp_prod"], check=True, cwd=str(PROJECT_ROOT), capture_output=True)
-        # Comparamos estado contra el trackeo oficial
+        # Compare status against official tracking
         status = subprocess.check_output(["git", "status", "-uno"], cwd=str(PROJECT_ROOT), text=True)
         if hasattr(status, "lower") and "your branch is behind" in status.lower():
              logging.info("Update detected! Local branch is behind origin/MobileApp_prod.")
@@ -56,7 +56,7 @@ def check_for_updates():
 def apply_updates():
     logging.info("Auto-Updating components from MobileApp_prod...")
     try:
-        # Sincronizamos forzósamente (git fetch ya lo hizo pero igual) para evitar conflictos de merge visuales
+        # Force sync (git fetch already did it but just in case) to avoid visual merge conflicts
         subprocess.run(["git", "reset", "--hard", "origin/MobileApp_prod"], check=True, cwd=str(PROJECT_ROOT), capture_output=True)
         logging.info("Pull complete. Running setup_pi.sh for new dependencies...")
         subprocess.run(["bash", "version_pi/setup_pi.sh"], check=True, cwd=str(PROJECT_ROOT), capture_output=True)
@@ -85,7 +85,7 @@ def run_app():
             bufsize=1
         )
         
-        # Iniciar hilos para capturar y loguear todas las salidas y errores de app.py
+        # Start threads to capture and log all output and errors from app.py
         threading.Thread(target=stream_to_logger, args=(proc.stdout, logging.INFO), daemon=True).start()
         threading.Thread(target=stream_to_logger, args=(proc.stderr, logging.ERROR), daemon=True).start()
         

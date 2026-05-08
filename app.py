@@ -6,17 +6,17 @@ from dotenv import load_dotenv
 import uvicorn
 
 def bootstrap():
-    """Asegura que el entorno esté listo antes de arrancar."""
+    """Ensures the environment is ready before starting."""
     project_dir = Path(__file__).resolve().parent
     env_file = project_dir / ".env"
     example_file = project_dir / ".env.example"
 
-    # 1. Crear .env si no existe
+    # 1. Create .env if it doesn't exist
     if not env_file.exists() and example_file.exists():
-        print("[*] Configuración inicial: Creando .env...")
+        print("[*] Initial configuration: Creating .env...")
         with open(example_file, "r") as f:
             content = f.read()
-        # Activar acceso remoto por defecto
+        # Enable remote access by default
         content = content.replace("ENABLE_REMOTE_ACCESS=false", "ENABLE_REMOTE_ACCESS=true")
         if "ENABLE_REMOTE_ACCESS" not in content:
             content += "\nENABLE_REMOTE_ACCESS=true"
@@ -25,44 +25,44 @@ def bootstrap():
 
     load_dotenv()
 
-    # 2. Verificar dependencias críticas (solo si no estamos en modo frozen/EXE)
+    # 2. Check critical dependencies (only if not in frozen/EXE mode)
     if not getattr(sys, 'frozen', False):
         try:
             import fastapi
             import pycloudflared
         except ImportError:
-            print("[*] Instalando dependencias necesarias...")
+            print("[*] Installing necessary dependencies...")
             try:
                 subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
-                print("[✔] Instalación completada.")
+                print("[✔] Installation completed.")
             except Exception as e:
-                print(f"[!] Error instalando dependencias: {e}")
+                print(f"[!] Error installing dependencies: {e}")
 
 def main():
     bootstrap()
     
-    # Cargar configuración básica
+    # Load basic configuration
     host = os.getenv("API_HOST", "0.0.0.0")
     port = int(os.getenv("API_PORT", "8001"))
     storage_dir = Path(os.getenv("STORAGE_DIR", "./vault_storage")).resolve()
 
     print("\n" + "="*42)
-    print("      Vault Ingestor - Sistema de Almacenaje")
+    print("      Vault Ingestor - Storage System")
     print("="*42)
-    print(f"[*] Almacenamiento: {storage_dir}")
-    print(f"[*] Servidor Local: http://{host}:{port}")
+    print(f"[*] Storage: {storage_dir}")
+    print(f"[*] Local Server: http://{host}:{port}")
     
-    # Asegurar que el directorio de almacenamiento existe
+    # Ensure storage directory exists
     storage_dir.mkdir(parents=True, exist_ok=True)
 
-    # Iniciar el servidor FastAPI
-    # El servidor se encuentra en api/main.py bajo el nombre 'app'
+    # Start FastAPI server
+    # The server is located in api/main.py as 'app'
     try:
         uvicorn.run("api.main:app", host=host, port=port, reload=False)
     except KeyboardInterrupt:
-        print("\n[*] Sistema detenido por el usuario.")
+        print("\n[*] System stopped by user.")
     except Exception as e:
-        print(f"\n[!] Error crítico: {e}")
+        print(f"\n[!] Critical error: {e}")
 
 if __name__ == "__main__":
     main()

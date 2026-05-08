@@ -7,9 +7,9 @@ import socket
 def check_module(module_name):
     try:
         __import__(module_name)
-        return True, "✅ Instalado"
+        return True, "✅ Installed"
     except ImportError as e:
-        return False, f"❌ No encontrado ({str(e)})"
+        return False, f"❌ Not found ({str(e)})"
 
 def is_venv():
     return sys.prefix != sys.base_prefix
@@ -19,53 +19,53 @@ def test_port(port):
         return s.connect_ex(('127.0.0.1', port)) == 0
 
 def main():
-    print("=== Vault Ingestor: Diagnóstico de Entorno (Raspberry Pi) ===")
-    print(f"Sistema Operativo: {platform.system()} {platform.release()}")
-    print(f"Versión de Python: {sys.version.split()[0]}")
-    print(f"Entorno Virtual: {'✅ Sí' if is_venv() else '⚠️  No (Sistema)'}")
+    print("=== Vault Ingestor: Environment Diagnostics (Raspberry Pi) ===")
+    print(f"Operating System: {platform.system()} {platform.release()}")
+    print(f"Python Version  : {sys.version.split()[0]}")
+    print(f"Virtual Env     : {'✅ Yes' if is_venv() else '⚠️  No (System)'}")
     
     project_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    print(f"Directorio de Trabajo: {project_dir}")
+    print(f"Working Directory: {project_dir}")
     print("-" * 40)
     
     modules = [
         "dotenv",           
         "fastapi",
         "uvicorn",
-        "PIL",               # Pillow requiere compilacion a veces
-        "pycloudflared"      # Túnel remoto (Fallback)
+        "PIL",               # Pillow requires compilation sometimes
+        "pycloudflared"      # Remote tunnel (Fallback)
     ]
     
-    print("Módulos Críticos y Dependencias de Red:")
+    print("Critical Modules and Network Dependencies:")
     all_found = True
     for mod in modules:
         found, status = check_module(mod)
         print(f"  - {mod:20}: {status}")
-        if not found and mod != "pycloudflared": # pycloudflared es opcional si está el binario oficial
+        if not found and mod != "pycloudflared": # pycloudflared is optional if the official binary is present
             all_found = False
             
-    # Comprobar el binario oficial de cloudflared
+    # Check for the official cloudflared binary
     try:
         import subprocess
         subprocess.run(["cloudflared", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-        print(f"  - {'cloudflared (bin)':20}: ✅ Instalado (Nativo)")
+        print(f"  - {'cloudflared (bin)':20}: ✅ Installed (Native)")
     except Exception:
-        print(f"  - {'cloudflared (bin)':20}: ⚠️  No encontrado (Usando Fallback)")
+        print(f"  - {'cloudflared (bin)':20}: ⚠️  Not found (Using Fallback)")
         
     print("-" * 40)
-    print("Estado de Red y Procesos de Vault Ingestor:")
+    print("Network Status and Vault Ingestor Processes:")
     
-    # Comprobar puerto 8000 o 8001
+    # Check port 8000 or 8001
     port_open = test_port(8000) or test_port(8001)
     if port_open:
-        print("  - API (8000/8001)       : ✅ Escuchando y listo")
+        print("  - API (8000/8001)       : ✅ Listening and ready")
     else:
-        print("  - API (8000/8001)       : ⚠️  Cerrado o No Disponible")
+        print("  - API (8000/8001)       : ⚠️  Closed or Not Available")
         
     print("-" * 40)
-    print("Configuración de Acceso Remoto:")
+    print("Remote Access Configuration:")
     
-    # Intentar cargar .env para leer valores reales
+    # Try to load .env to read real values
     try:
         from dotenv import load_dotenv
         env_path = os.path.join(project_dir, ".env")
@@ -74,23 +74,23 @@ def main():
         pass
         
     remote_enabled = os.getenv("ENABLE_REMOTE_ACCESS", "false").lower() == "true"
-    print(f"  - Acceso Remoto Habilitado: {'✅ Sí' if remote_enabled else '❌ No (Solo Local)'}")
+    print(f"  - Remote Access Enabled: {'✅ Yes' if remote_enabled else '❌ No (Local Only)'}")
     
     public_url = os.getenv("PUBLIC_URL")
     if public_url:
-        print(f"  - URL Pública Detectada   : ✅ {public_url}")
+        print(f"  - Public URL Detected    : ✅ {public_url}")
     elif remote_enabled:
-        print(f"  - .env Configurado        : {'✅ OK' if os.path.exists(os.path.join(project_dir, '.env')) else '❌ Falta archivo .env'}")
-        print(f"  - URL Pública             : ⚠️  Esperando inicio de túnel (ver log)...")
+        print(f"  - .env Configured        : {'✅ OK' if os.path.exists(os.path.join(project_dir, '.env')) else '❌ Missing .env file'}")
+        print(f"  - Public URL             : ⚠️  Waiting for tunnel startup (check logs)...")
     
     print("-" * 40)
     
     if not all_found:
-        print("⚠️  Faltan dependencias críticas.")
-        print("Por favor, ejecuta ./version_pi/tools/repair_system.sh para dejar todo a punto.")
+        print("⚠️  Critical dependencies missing.")
+        print("Please run ./version_pi/tools/repair_system.sh to get everything ready.")
     else:
-        print("✅ Las dependencias operativas clave están correctamente instaladas.")
-        print("Para seguir la actividad de red o posibles fallos, revisa en el log maestro:")
+        print("✅ Key operative dependencies are correctly installed.")
+        print("To track network activity or possible failures, check the master log:")
         print(f"  tail -n 20 {os.path.join(project_dir, 'app.log')}")
 
 if __name__ == "__main__":

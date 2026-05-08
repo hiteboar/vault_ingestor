@@ -1,48 +1,48 @@
 #!/bin/bash
-# Script para reinstalar y reparar entornos y dependencias, y regenerar el autorun
+# Script to reinstall and repair environments and dependencies, and regenerate autorun
 
-echo "=== Vault Ingestor: Reparación de Sistema (Raspberry Pi) ==="
+echo "=== Vault Ingestor: System Repair (Raspberry Pi) ==="
 
 PROJECT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$PROJECT_DIR" || exit
 
-echo "[1/5] Instalando dependencias base del sistema..."
+echo "[1/5] Installing system base dependencies..."
 sudo apt-get update
 sudo apt-get install -y libopenjp2-7 libtiff6 libjpeg-dev zlib1g-dev python3-venv rustc cargo libffi-dev libssl-dev ffmpeg curl
 
-# Instalar Cloudflared oficial para ARM (armv7/armhf)
+# Install official Cloudflared for ARM (armv7/armhf)
 if ! command -v cloudflared &> /dev/null; then
-    echo "[*] Instalando Cloudflared oficial para Raspberry Pi..."
+    echo "[*] Installing official Cloudflared for Raspberry Pi..."
     curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-armhf.deb
     sudo dpkg -i cloudflared.deb
     rm cloudflared.deb
 fi
 
-echo "[2/5] Regenerando entorno virtual (Python)..."
+echo "[2/5] Regenerating virtual environment (Python)..."
 if [ ! -d ".venv" ]; then
-    echo "Creando .venv..."
+    echo "Creating .venv..."
     python3 -m venv .venv
 fi
 . .venv/bin/activate
 
-# Compatibilidad de compilacion para módulo Cryptography en Python 3.13 (Raspberry OS Trixie)
+# Compilation compatibility for Cryptography module on Python 3.13 (Raspberry OS Trixie)
 export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
 
-echo "Actualizando librerías..."
+echo "Updating libraries..."
 pip install --upgrade pip
 pip install -r requirements.txt
 pip install pycloudflared
 
-echo "[3/5] Verificando configuración .env..."
+echo "[3/5] Verifying .env configuration..."
 if [ ! -f ".env" ]; then
-    echo "Creando .env inicial..."
+    echo "Creating initial .env..."
     cp .env.example .env
-    # Forzar acceso remoto en la reparación si es un sistema nuevo
+    # Force remote access on repair if it's a new system
     sed -i 's/ENABLE_REMOTE_ACCESS=false/ENABLE_REMOTE_ACCESS=true/g' .env
 fi
 
-echo "[4/5] Reparando Servicio de Auto-Arrranque (Systemd) para resiliencia..."
-# Usamos Restart=always para garantizar que se recupere automáticamente ante caídas
+echo "[4/5] Repairing Auto-Start Service (Systemd) for resilience..."
+# Using Restart=always to ensure automatic recovery after crashes
 
 USER_NAME=$USER
 SERVICE_FILE="/tmp/vault_ingestor.service"
@@ -69,16 +69,16 @@ sudo systemctl daemon-reload
 sudo systemctl enable vault_ingestor
 
 echo ""
-echo "=== Reparación Completada! ==="
-echo "1. Dependencias y archivos vitales han sido restaurados."
-echo "2. Systemd ha sido configurado para autorecuperar la aplicación (Restart=always)."
+echo "=== Repair Completed! ==="
+echo "1. Vital dependencies and files have been restored."
+echo "2. Systemd has been configured to auto-recover the application (Restart=always)."
 echo ""
-echo "[5/5] Procediendo al REINICIO del servicio en segundo plano..."
-echo "      (Esta operación puede tardar unos segundos, por favor espera...)"
+echo "[5/5] Proceeding to RESTART the service in the background..."
+echo "      (This operation may take a few seconds, please wait...)"
 sudo systemctl restart vault_ingestor
 
 echo ""
-echo "[✔] Servicio reiniciado con éxito."
-echo "El túnel remoto y la conexión con la App móvil se están restableciendo."
-echo "Para obtener el nuevo Código QR o ver el estado, ejecuta:"
-echo "   ./ejecutar_vault.sh"
+echo "[✔] Service restarted successfully."
+echo "Remote tunnel and connection with the mobile App are being re-established."
+echo "To get the new QR Code or check status, run:"
+echo "   ./run_vault.sh"

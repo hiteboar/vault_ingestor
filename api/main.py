@@ -39,7 +39,7 @@ load_dotenv()
 STORAGE_DIR = Path(os.getenv("STORAGE_DIR", str(BASE_DIR / "vault_storage"))).resolve()
 
 def get_robust_path(target_path: Path, fallback_subdir: str) -> Path:
-    """Asegura que el directorio sea escribible, de lo contrario devuelve un fallback local."""
+    """Ensures the directory is writable, otherwise returns a local fallback."""
     try:
         target_path.mkdir(parents=True, exist_ok=True)
         # Test de escritura
@@ -49,12 +49,12 @@ def get_robust_path(target_path: Path, fallback_subdir: str) -> Path:
         return target_path
     except Exception as e:
         fallback = BASE_DIR / "vault_internal" / fallback_subdir
-        print(f"\n[!] ERROR DE PERMISOS en: {target_path}")
-        print(f"    Usando fallback local: {fallback}")
+        print(f"\n[!] PERMISSIONS ERROR at: {target_path}")
+        print(f"    Using local fallback: {fallback}")
         fallback.mkdir(parents=True, exist_ok=True)
         return fallback
 
-# Aplicar lógica robusta a directorios críticos
+# Apply robust logic to critical directories
 SAFE_STORAGE_DIR = get_robust_path(STORAGE_DIR, "storage")
 META_LOG = Path(os.getenv("META_LOG", str(SAFE_STORAGE_DIR / "metadata.jsonl"))).resolve()
 CACHE_DIR = get_robust_path(STORAGE_DIR / ".cache" / "thumbnails", "thumbnails")
@@ -62,12 +62,12 @@ AUDIT_LOG = SAFE_STORAGE_DIR / "audit.log"
 ENV_PATH = BASE_DIR / ".env"
 RECOVERY_FILE = BASE_DIR / "vault_internal" / ".recovery_token"
 
-# Initialize Auth (ahora usa STORAGE_DIR original pero AuthManager debe ser robusto internamente)
-# No obstante, pasamos un path seguro para evitar el crash inicial
+# Initialize Auth (now uses original STORAGE_DIR but AuthManager must be robust internally)
+# However, we pass a safe path to avoid initial crash
 auth = AuthManager(get_robust_path(STORAGE_DIR / ".vault", "vault_auth"))
 
 def maintain_cache(cache_dir: Path, max_size_mb: int = 500):
-    """Elimina las miniaturas más antiguas si se supera el límite de espacio."""
+    """Deletes the oldest thumbnails if the space limit is exceeded."""
     try:
         # Buscar todos los formatos soportados
         files = []
@@ -78,14 +78,14 @@ def maintain_cache(cache_dir: Path, max_size_mb: int = 500):
         total_size = sum(f.stat().st_size for f in files)
         
         if total_size > max_size_mb * 1024 * 1024:
-            # Borrar el 20% más antiguo
+            # Delete the oldest 20%
             to_delete = files[:max(1, len(files) // 5)]
             for f in to_delete:
                 try:
                     f.unlink()
                 except:
                     pass
-            print(f"[CACHE] Limpieza automática: {len(to_delete)} miniaturas eliminadas.")
+            print(f"[CACHE] Automatic cleanup: {len(to_delete)} thumbnails removed.")
     except Exception as e:
         print(f"[CACHE_ERROR] Error en mantenimiento: {e}")
 
@@ -120,11 +120,11 @@ def log_audit(action: str, path: Path, device_info: dict):
         print(f"[AUDIT_ERROR] {e}")
 
 def extract_timestamp(file_path: Path) -> str:
-    """Extrae la fecha más precisa posible de un archivo y la devuelve en formato ISO."""
+    """Extracts the most accurate date possible from a file and returns it in ISO format."""
     ext = file_path.suffix.lower()
     filename = file_path.name
     
-    # 1. Intentar EXIF para imágenes
+    # 1. Try EXIF for images
     if ext in {".jpg", ".jpeg", ".png", ".webp"}:
         try:
             from PIL import Image as PILImage
@@ -137,8 +137,8 @@ def extract_timestamp(file_path: Path) -> str:
                         tag = TAGS.get(tag_id, tag_id)
                         if tag in ('DateTimeOriginal', 'DateTime', 'DateTimeDigitized') and value:
                             try:
-                                # El formato EXIF suele ser "YYYY:MM:DD HH:MM:SS"
-                                # Pero a veces tiene caracteres raros o nulos al final
+                                # EXIF format is usually "YYYY:MM:DD HH:MM:SS"
+                                # But sometimes it has weird or null characters at the end
                                 date_str = str(value).strip().replace('\x00', '')
                                 dt = datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
                                 return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -147,7 +147,7 @@ def extract_timestamp(file_path: Path) -> str:
         except:
             pass
             
-    # 2. Intentar FFprobe para vídeos
+    # 2. Try FFprobe for videos
     elif ext in {".mp4", ".mov", ".avi", ".mkv", ".webm"}:
         try:
             import subprocess
@@ -156,27 +156,27 @@ def extract_timestamp(file_path: Path) -> str:
             if result.returncode == 0:
                 meta = json.loads(result.stdout)
                 tags = meta.get("format", {}).get("tags", {})
-                # Probar varias etiquetas de creación
+                # Try various creation tags
                 creation_time = tags.get("creation_time") or tags.get("com.apple.quicktime.creationdate")
                 if creation_time:
                     return creation_time
         except:
             pass
             
-    # 3. Intentar extraer de nombre de archivo (Patrón: YYYYMMDD o YYYY-MM-DD)
-    # Común en móviles: IMG_20230515_... o VID_20230515_...
+    # 3. Try to extract from filename (Pattern: YYYYMMDD or YYYY-MM-DD)
+    # Common on mobiles: IMG_20230515_... or VID_20230515_...
     import re
     date_match = re.search(r'(\d{4})[-_]?(\d{2})[-_]?(\d{2})', filename)
     if date_match:
         try:
             year, month, day = date_match.groups()
-            # Verificar que parezca una fecha razonable
+            # Check if it looks like a reasonable date
             if 1990 <= int(year) <= 2100 and 1 <= int(month) <= 12 and 1 <= int(day) <= 31:
                 return f"{year}-{month}-{day}T12:00:00Z"
         except:
             pass
 
-    # 4. Fallback a fecha de modificación del sistema (en UTC)
+    # 4. Fallback to system modification date (in UTC)
     try:
         mtime = file_path.stat().st_mtime
         return datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -188,7 +188,7 @@ class MetadataManager:
         self._cache = {}
         
     def load(self):
-        """Carga el log de metadatos en RAM para búsquedas instantáneas."""
+        """Loads the metadata log into RAM for instant searches."""
         if not META_LOG.exists():
             return
         new_cache = {}
@@ -203,9 +203,9 @@ class MetadataManager:
                             item["id"] = item_id
                         new_cache[item_id] = item
             self._cache = new_cache
-            print(f"[META] Caché cargada: {len(self._cache)} archivos indexados en RAM.")
+            print(f"[META] Cache loaded: {len(self._cache)} files indexed in RAM.")
         except Exception as e:
-            print(f"[META_ERROR] Error cargando metadatos: {e}")
+            print(f"[META_ERROR] Error loading metadata: {e}")
             
     def get_item(self, item_id: str) -> Optional[dict]:
         return self._cache.get(item_id)
@@ -222,26 +222,26 @@ class MetadataManager:
             del self._cache[item_id]
 
 metadata_cache = MetadataManager()
-thumb_semaphore = asyncio.Semaphore(3)  # Límite de 3 generaciones simultáneas
+thumb_semaphore = asyncio.Semaphore(3)  # Limit of 3 simultaneous generations
 
 async def pre_generate_thumbnails_worker():
-    """Worker de fondo que busca archivos sin miniatura y los genera sín prisas."""
-    print("[WORKER] Iniciando pre-generación de miniaturas...")
-    # Obtenemos snapshot de los IDs actuales
+    """Background worker that looks for files without thumbnails and generates them without haste."""
+    print("[WORKER] Starting pre-generation of thumbnails...")
+    # Get snapshot of current IDs
     ids = list(metadata_cache._cache.keys())
     for item_id in ids:
         thumb_path = CACHE_DIR / f"{item_id}.webp"
         if not thumb_path.exists():
             try:
-                # Simulamos una petición interna para aprovechar la lógica de generación con semáforo
-                # Pero lo hacemos de forma que no bloquee aplicaciones críticas
+                # We simulate an internal request to leverage generation logic with semaphore
+                # But we do it in a way that doesn't block critical applications
                 await asyncio.sleep(0.5) # Pausa entre generaciones para no ahogar la Pi
                 # Llamamos a una función interna de generación (refactorizamos get_thumbnail después si es necesario)
                 # Por ahora, simplemente dejamos que ocurra bajo demanda o implementamos aquí
                 pass 
             except:
                 continue
-    print("[WORKER] Pre-generación completada.")
+    print("[WORKER] Pre-generation completed.")
 
 cloudflare_tunnel = None
 
@@ -256,7 +256,7 @@ async def startup_event():
         RECOVERY_FILE.parent.mkdir(parents=True, exist_ok=True)
         RECOVERY_FILE.write_text(secrets.token_hex(16))
     except Exception as e:
-        print(f"[*] Fallo generando token de recuperación: {e}")
+        print(f"[*] Failed generating recovery token: {e}")
 
     
     # Lanzar worker de pre-generación en segundo plano (sin esperar)
@@ -269,49 +269,67 @@ async def startup_event():
         def _start_tunnel():
             global cloudflare_tunnel
             port = int(os.getenv("API_PORT", "8001"))
+            token = os.getenv("CLOUDFLARE_TOKEN")
             
             # Estrategia 1: Intentar usar el binario oficial del sistema (más estable en Pi)
             try:
-                process = subprocess.Popen(
-                    ["cloudflared", "tunnel", "--url", f"http://localhost:{port}"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1
-                )
-                
-                # Buscar la URL y mantener el pipe abierto para evitar crash (SIGPIPE)
-                found_url = False
-                for line in process.stdout:
-                    if not found_url and "trycloudflare.com" in line:
-                        parts = line.split()
-                        for p in parts:
-                            if "https://" in p and "trycloudflare.com" in p:
-                                url = p.strip()
-                                os.environ["PUBLIC_URL"] = url
-                                print("\n" + "!"*50)
-                                print("   ACCESO REMOTO (OFICIAL) ACTIVADO")
-                                print(f"   URL: {url}")
-                                print("!"*50)
-                                found_url = True
-
-                
+                if token:
+                    print(f"[*] Using Cloudflare Token for persistent tunnel...")
+                    process = subprocess.Popen(
+                        ["cloudflared", "tunnel", "run", "--token", token],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1
+                    )
+                    # In token mode, the URL should already be configured in the Cloudflare panel
+                    # and point to this local port. We use PUBLIC_URL from .env if it exists.
+                    url = os.getenv("PUBLIC_URL", "Configured in Cloudflare dashboard")
+                    print("\n" + "!"*50)
+                    print("   REMOTE ACCESS (PERSISTENT) ENABLED")
+                    print(f"   URL: {url}")
+                    print("!"*50)
+                else:
+                    process = subprocess.Popen(
+                        ["cloudflared", "tunnel", "--url", f"http://localhost:{port}"],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1
+                    )
+                    
+                    # Buscar la URL y mantener el pipe abierto para evitar crash (SIGPIPE)
+                    found_url = False
+                    for line in process.stdout:
+                        if not found_url and "trycloudflare.com" in line:
+                            parts = line.split()
+                            for p in parts:
+                                if "https://" in p and "trycloudflare.com" in p:
+                                    url = p.strip()
+                                    os.environ["PUBLIC_URL"] = url
+                                    print("\n" + "!"*50)
+                                    print("   REMOTE ACCESS (OFFICIAL) ENABLED")
+                                    print(f"   URL: {url}")
+                                    print("!"*50)
+                                    found_url = True
             except Exception as e:
-                print(f"[*] Cloudflared del sistema no disponible o falló: {e}")
-
-            # Estrategia 2: Fallback a pycloudflared (para Windows/otros)
-            try:
-                from pycloudflared import try_cloudflare
-                cloudflare_tunnel = try_cloudflare(port=port)
-                os.environ["PUBLIC_URL"] = cloudflare_tunnel.tunnel
-                
-                print("\n" + "!"*50)
-                print("   ACCESO REMOTO (PY) ACTIVADO")
-                print(f"   URL: {cloudflare_tunnel.tunnel}")
-                print("!"*50)
-            except Exception as e:
-                print(f"\n[TUNNEL_ERROR] No se pudo iniciar el acceso remoto: {e}")
-                print("[*] El sistema seguirá funcionando de forma local.\n")
+                if not token:
+                    print(f"[*] System cloudflared not available or failed: {e}")
+                    # Strategy 2: Fallback to pycloudflared (for Windows/others)
+                    try:
+                        from pycloudflared import try_cloudflare
+                        cloudflare_tunnel = try_cloudflare(port=port)
+                        os.environ["PUBLIC_URL"] = cloudflare_tunnel.tunnel
+                        
+                        print("\n" + "!"*50)
+                        print("   REMOTE ACCESS (PY) ENABLED")
+                        print(f"   URL: {cloudflare_tunnel.tunnel}")
+                        print("!"*50)
+                    except Exception as e2:
+                        print(f"\n[TUNNEL_ERROR] Could not start remote access: {e2}")
+                        print("[*] The system will continue running locally.\n")
+                else:
+                    print(f"\n[TUNNEL_ERROR] Cloudflare Token error: {e}")
                 
         threading.Thread(target=_start_tunnel, daemon=True).start()
 
@@ -367,7 +385,7 @@ def update_folder_meta(folder_name: str):
 
 @app.get("/api/folders")
 async def list_folders(x_device_token: str = Header(...)):
-    """Devuelve la lista de carpetas disponibles en el almacenamiento."""
+    """Returns the list of folders available in storage."""
     device = auth.get_device_info(x_device_token)
     if not device:
         raise HTTPException(status_code=401, detail="Invalid token")
@@ -394,7 +412,7 @@ async def list_folders(x_device_token: str = Header(...)):
 
 @app.get("/api/folders/meta")
 async def get_folders_meta(x_device_token: str = Header(...)):
-    """Devuelve la metainformación de todas las carpetas (calculada dinámicamente desde la caché)."""
+    """Returns the meta-information of all folders (dynamically calculated from cache)."""
     device = auth.get_device_info(x_device_token)
     if not device:
         raise HTTPException(status_code=401, detail="Invalid token")
@@ -432,7 +450,7 @@ async def get_folders_meta(x_device_token: str = Header(...)):
 
 @app.post("/api/folders")
 async def create_folder(data: FolderCreate, x_device_token: str = Header(...)):
-    """Crea una nueva carpeta física en el almacenamiento."""
+    """Creates a new physical folder in storage."""
     device = auth.get_device_info(x_device_token)
     if not device or device.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Only admins can create folders")
@@ -795,23 +813,23 @@ async def get_thumbnail(
 ):
     """Returns a cached or generated thumbnail for an image (optimized WebP)."""
     try:
-        # Validación de seguridad (opcional para miniaturas, pero recomendada)
+        # Security validation (optional for thumbnails, but recommended)
         auth_token = x_device_token or token
         if auth_token:
-            auth.get_device_info(auth_token) # Validamos que el dispositivo existe
+            auth.get_device_info(auth_token) # Validate that the device exists
             
-        # 1. Búsqueda instantánea en RAM
+        # 1. Instant RAM search
         saved_path_str = metadata_cache.get_path(item_id)
         if not saved_path_str:
-            print(f"[THUMB_DEBUG] ID no encontrado en caché RAM: {item_id}")
+            print(f"[THUMB_DEBUG] ID not found in RAM cache: {item_id}")
             raise HTTPException(status_code=404, detail="Item not in cache")
             
         orig_path = Path(saved_path_str)
         if not orig_path.exists():
-            print(f"[THUMB_DEBUG] El archivo original ya no existe: {saved_path_str}")
+            print(f"[THUMB_DEBUG] Original file no longer exists: {saved_path_str}")
             raise HTTPException(status_code=404, detail="Original file missing")
         
-        # 2. Verificar si ya existe en disco (buscando múltiples extensiones)
+        # 2. Check if it already exists on disk (searching multiple extensions)
         thumb_path_webp = CACHE_DIR / f"{item_id}.webp"
         thumb_path_jpg = CACHE_DIR / f"{item_id}.jpg"
         
@@ -820,16 +838,16 @@ async def get_thumbnail(
         if thumb_path_jpg.exists():
             return FileResponse(thumb_path_jpg)
             
-        print(f"[THUMB_DEBUG] Generando nueva miniatura para: {item_id}")
+        print(f"[THUMB_DEBUG] Generating new thumbnail for: {item_id}")
         
-        # 3. Probabilidad de mantenimiento
+        # 3. Maintenance probability
         import random
         if random.random() < 0.02:
             background_tasks.add_task(maintain_cache, CACHE_DIR)
 
-        # 4. Generación con Semáforo (Control de CPU)
+        # 4. Generation with Semaphore (CPU control)
         async with thumb_semaphore:
-            # Re-verificar tras la espera por si otro hilo la generó
+            # Re-verify after waiting in case another thread generated it
             if thumb_path_webp.exists(): return FileResponse(thumb_path_webp)
             if thumb_path_jpg.exists(): return FileResponse(thumb_path_jpg)
                 
@@ -848,7 +866,7 @@ async def get_thumbnail(
                             img.save(thumb_path_webp, "WEBP", quality=70)
                             return FileResponse(thumb_path_webp)
                         except Exception:
-                            # Fallback a JPEG si falla WEBP (falta de encoder en el sistema)
+                            # Fallback to JPEG if WEBP fails (missing encoder on the system)
                             img.save(thumb_path_jpg, "JPEG", quality=75)
                             return FileResponse(thumb_path_jpg)
                             
@@ -869,7 +887,7 @@ async def get_thumbnail(
                                 tmp_jpg.unlink()
                                 return FileResponse(thumb_path_jpg)
             except Exception as gen_err:
-                print(f"[THUMB_GEN_ERROR] Fallo crítico generando miniatura para {item_id}: {gen_err}")
+                print(f"[THUMB_GEN_ERROR] Critical failure generating thumbnail for {item_id}: {gen_err}")
                             
         raise HTTPException(status_code=404, detail="Thumbnail could not be generated")
     except HTTPException as he:
@@ -880,7 +898,7 @@ async def get_thumbnail(
     
 @app.get("/api/media/file/{path:path}")
 async def get_media_file(path: str, x_device_token: Optional[str] = Header(None), token: Optional[str] = Query(None)):
-    """Serves a media file with device token validation (via header or query para)."""
+    """Serves a media file with device token validation (via header or query parameter)."""
     auth_token = x_device_token or token
     if not auth_token:
         raise HTTPException(status_code=401, detail="Token not provided")
@@ -999,7 +1017,7 @@ async def upload_file(
         with open(META_LOG, "a", encoding="utf-8") as f:
             f.write(json.dumps(item) + "\n")
             
-        # Sincronizar Cache en RAM
+        # Sync RAM Cache
         metadata_cache.update(item)
             
         update_folder_meta(context)
@@ -1053,7 +1071,7 @@ async def delete_item(item_id: str, x_device_token: str = Header(...)):
         with open(META_LOG, "w", encoding="utf-8") as f:
             f.writelines(remaining_items)
 
-        # 4. Sincronizar Cache en RAM
+        # 4. Sync RAM Cache
         metadata_cache.remove(item_id)
         
         if target_item.get("context"):
@@ -1127,7 +1145,7 @@ async def delete_folder(folder_name: str, x_device_token: str = Header(...)):
             with open(META_LOG, "w", encoding="utf-8") as f:
                 f.writelines(remaining_items)
                 
-            # 3. Recargar Cache en RAM completa tras borrar carpeta
+            # 3. Reload full RAM Cache after deleting folder
             metadata_cache.load()
                 
         # Log Audit

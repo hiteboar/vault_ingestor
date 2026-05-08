@@ -4,18 +4,23 @@ import sys
 from pathlib import Path
 
 # Add root to path so we can import extract_timestamp and META_LOG
-ROOT_DIR = Path(__file__).resolve().parent.parent
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(ROOT_DIR))
 
-from api.main import extract_timestamp, META_LOG
+# Ensure we can import from api
+try:
+    from api.main import extract_timestamp, META_LOG
+except ImportError:
+    # Fallback if structure is different
+    from vault_ingestor.api.main import extract_timestamp, META_LOG
 
 def reindex():
     if not META_LOG.exists():
-        print(f"Error: No se encuentra el archivo de metadatos en {META_LOG}")
-        print("Si has configurado una ruta distinta en .env, asegúrate de que el script la detecte.")
+        print(f"Error: Metadata file not found at {META_LOG}")
+        print("If you have configured a different path in .env, make sure the script detects it.")
         return
 
-    print(f"🚀 Iniciando re-indexación de fechas en {META_LOG}...")
+    print(f"🚀 Starting date re-indexing in {META_LOG}...")
     updated_items = []
     changes = 0
     
@@ -33,25 +38,25 @@ def reindex():
                     
                     if old_ts != new_ts:
                         print(f"  [UPDATE] {item.get('name')}:")
-                        print(f"    Antiguo: {old_ts}")
-                        print(f"    Nuevo:   {new_ts}")
+                        print(f"    Old: {old_ts}")
+                        print(f"    New: {new_ts}")
                         item["timestamp"] = new_ts
                         changes += 1
                     updated_items.append(item)
                 else:
-                    print(f"  [SKIP] Archivo no encontrado físicamente: {item.get('name')}")
+                    print(f"  [SKIP] File not found physically: {item.get('name')}")
                     updated_items.append(item)
             except Exception as e:
-                print(f"  [ERR] Error procesando línea: {e}")
+                print(f"  [ERR] Error processing line: {e}")
 
-    # Guardar cambios
+    # Save changes
     if changes > 0:
         with open(META_LOG, "w", encoding="utf-8") as f:
             for item in updated_items:
                 f.write(json.dumps(item) + "\n")
-        print(f"\n✅ Re-indexación completada. Se han actualizado {changes} registros.")
+        print(f"\n✅ Re-indexing completed. {changes} records updated.")
     else:
-        print("\n✨ No se encontraron cambios necesarios. Todos los timestamps están al día.")
+        print("\n✨ No changes needed. All timestamps are up to date.")
 
 if __name__ == "__main__":
     reindex()

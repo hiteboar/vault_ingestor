@@ -149,7 +149,7 @@ export default function App() {
       if (e.response?.status === 401) {
         handleLogout();
       } else {
-        setError('Error de conexión o token revocado.');
+        setError('Connection error or token revoked.');
       }
     } finally {
       if (showLoading) setLoading(false);
@@ -165,7 +165,7 @@ export default function App() {
       setConnected(true);
       await loadData();
     } catch (e) {
-      setError('Error al vincular. Verifica la URL y el PIN o los permisos.');
+      setError('Link error. Check URL and PIN or permissions.');
       setLoading(false);
     }
   };
@@ -181,7 +181,7 @@ export default function App() {
     if (!permission?.granted) {
       const result = await requestPermission();
       if (!result.granted) {
-         setError('Necesitas otorgar permiso de cámara para escanear.');
+         setError('Camera permission is required for scanning.');
          return;
       }
     }
@@ -193,12 +193,11 @@ export default function App() {
     if (!previewItem) return;
     
     Alert.alert(
-        'Eliminar Archivo',
-        '¿Estás seguro de que quieres eliminar este archivo permanentemente?',
+        'Are you sure you want to delete this file permanently?',
         [
-            { text: 'Cancelar', style: 'cancel' },
+            { text: 'Cancel', style: 'cancel' },
             { 
-                text: 'Eliminar', 
+                text: 'Delete', 
                 style: 'destructive',
                 onPress: async () => {
                     try {
@@ -207,7 +206,7 @@ export default function App() {
                         setPreviewItem(null);
                         await loadData();
                     } catch (e) {
-                        alert('Error al eliminar: ' + e.message);
+                        alert('Delete error: ' + e.message);
                     } finally {
                         setLoading(false);
                     }
@@ -221,12 +220,12 @@ export default function App() {
       if (currentFolder === 'root') return;
       
       Alert.alert(
-          'Eliminar Carpeta',
-          `¿Estás seguro de que quieres eliminar la carpeta "${currentFolder}" y TODOS sus archivos físicos?`,
+          'Delete Folder',
+          `Are you sure you want to delete folder "${currentFolder}" and ALL its physical files?`,
           [
-              { text: 'Cancelar', style: 'cancel' },
+              { text: 'Cancel', style: 'cancel' },
               { 
-                  text: 'Borrar Todo', 
+                  text: 'Delete All', 
                   style: 'destructive',
                   onPress: async () => {
                         try {
@@ -235,7 +234,7 @@ export default function App() {
                             setCurrentFolder('root');
                             await loadData();
                         } catch (e) {
-                            alert('Error al eliminar carpeta: ' + e.message);
+                            alert('Error deleting folder: ' + e.message);
                         } finally {
                             setLoading(false);
                         }
@@ -255,7 +254,7 @@ export default function App() {
           setNewFolderModal(false);
           await loadData();
       } catch (e) {
-          alert('Error al crear carpeta: ' + e.message);
+          alert('Error creating folder: ' + e.message);
       } finally {
           setLoading(false);
       }
@@ -302,14 +301,14 @@ export default function App() {
               });
               successCount++;
           } catch(e) {
-              alert(`Error al subir ${filename}: ${e.message}`);
+              alert(`Error uploading ${filename}: ${e.message}`);
           }
       }
       
       setUploadState({ active: false, current: 0, total: 0, percent: 0 });
       loadData();
       if (successCount > 0 && successCount < assets.length) {
-          alert(`Se subieron ${successCount} de ${assets.length} archivos correctamente.`);
+          alert(`Uploaded ${successCount} of ${assets.length} files successfully.`);
       }
   };
 
@@ -341,7 +340,7 @@ export default function App() {
         const src = await api.getMediaUrl(item);
         setPreviewSrc(src);
     } catch (e) {
-        setPreviewError("No se pudo obtener la URL del archivo");
+        setPreviewError("Could not get file URL");
     }
   };
 
@@ -352,7 +351,7 @@ export default function App() {
         const downloadRes = await FileSystem.downloadAsync(previewSrc.uri, fileUri, { headers: previewSrc.headers });
         await Sharing.shareAsync(downloadRes.uri);
     } catch (e) {
-        alert('Error al descargar: ' + e.message);
+        alert('Download error: ' + e.message);
     }
   };
 
@@ -381,7 +380,7 @@ export default function App() {
           const info = await api.fetchItemInfo(previewItem.id);
           setFileInfo(info);
       } catch (e) {
-          alert('Error al obtener información: ' + e.message);
+          alert('Error getting info: ' + e.message);
       } finally {
           setInfoLoading(false);
       }
@@ -412,7 +411,7 @@ export default function App() {
           setInviteConfigModal(false);
           setDrawerOpen(false);
       } catch (e) {
-          alert('Error creando invitación: ' + e.message);
+          alert('Error creating invitation: ' + e.message);
       } finally {
           setLoading(false);
       }
@@ -550,7 +549,7 @@ export default function App() {
               
               if (currentFolder === 'root') {
                   const [y, m] = itemGroup.split('-');
-                  const monthNames = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+                  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
                   pendingMarker = `${monthNames[parseInt(m, 10)-1] || ''}\n${y}`;
               } else {
                   rows.push({ type: 'type_marker', id: `marker-${rows.length}`, label: itemGroup.toUpperCase() });
@@ -595,7 +594,7 @@ export default function App() {
             <View style={styles.scannerOverlay}>
                <View style={styles.scannerBox} />
                <TouchableOpacity style={styles.buttonCancelScanner} onPress={() => setShowScanner(false)}>
-                 <Text style={styles.buttonText}>Cancelar Escaneo</Text>
+                 <Text style={styles.buttonText}>Cancel Scan</Text>
                </TouchableOpacity>
             </View>
           </SafeAreaView>
@@ -606,22 +605,22 @@ export default function App() {
         <SafeAreaView style={styles.container}>
           <StatusBar barStyle="light-content" />
           <View style={styles.content}>
-            <Text style={styles.title}>Vincular Vault</Text>
-            <Text style={styles.subtitle}>Escanea un QR para entrar.</Text>
+            <Text style={styles.title}>Link Vault</Text>
+            <Text style={styles.subtitle}>Scan a QR to enter.</Text>
             
             <TouchableOpacity style={styles.buttonScan} onPress={openScanner}>
-              <Text style={styles.buttonText}>📷 Escanear Código QR</Text>
+              <Text style={styles.buttonText}>📷 Scan QR Code</Text>
             </TouchableOpacity>
   
-            <View style={styles.divider}><Text style={styles.dividerText}>O MANUALMENTE</Text></View>
+            <View style={styles.divider}><Text style={styles.dividerText}>OR MANUALLY</Text></View>
   
-            <TextInput style={styles.input} placeholder="URL del Servidor" placeholderTextColor="#64748b" value={url} onChangeText={setUrl} autoCapitalize="none"/>
+            <TextInput style={styles.input} placeholder="Server URL" placeholderTextColor="#64748b" value={url} onChangeText={setUrl} autoCapitalize="none"/>
             <TextInput style={styles.inputPin} placeholder="PIN" placeholderTextColor="#3b82f6" value={pin} onChangeText={setPin} keyboardType="numeric" maxLength={6}/>
             
             {error ? <Text style={styles.errorText}>{error}</Text> : null}
   
             <TouchableOpacity style={[styles.button, (!url || !pin) && styles.buttonDisabled]} onPress={handleLink} disabled={!url || !pin}>
-              <Text style={styles.buttonText}>Vincular</Text>
+              <Text style={styles.buttonText}>Link</Text>
             </TouchableOpacity>
           </View>
         </SafeAreaView>
@@ -639,7 +638,7 @@ export default function App() {
                     <MaterialCommunityIcons name="arrow-left" size={28} color="#3b82f6" />
                 </TouchableOpacity>
             )}
-            <Text style={styles.headerTitle}>{view === 'stats' ? 'Panel de Control' : 'Vault Ingestor'}</Text>
+            <Text style={styles.headerTitle}>{view === 'stats' ? 'Control Panel' : 'Vault Ingestor'}</Text>
         </View>
         <View style={{flexDirection: 'row', alignItems:'center'}}>
             <TouchableOpacity onPress={() => loadData(true)} disabled={loading} style={{marginRight: 20}}>
@@ -677,7 +676,7 @@ export default function App() {
                                 style={{marginRight: 6}}
                             />
                             <Text style={[styles.folderChipText, currentFolder === f && styles.folderChipTextActive]}>
-                                {f === 'root' ? 'Línea de Tiempo' : f}
+                                {f === 'root' ? 'Timeline' : f}
                             </Text>
                         </TouchableOpacity>
                     )}
@@ -692,7 +691,7 @@ export default function App() {
             {/* Timeline Filters (Year/Month) */}
             {currentFolder === 'root' && (
                 <View style={styles.filterBar}>
-                    <Text style={styles.filterLabel}>Filtrar:</Text>
+                    <Text style={styles.filterLabel}>Filter:</Text>
                     <FlatList 
                         horizontal
                         showsHorizontalScrollIndicator={false}
@@ -712,21 +711,21 @@ export default function App() {
             {currentFolder !== 'root' && (
                 <View style={styles.folderActions}>
                     <View style={{flexDirection: 'row', alignItems: 'center', zIndex: 50}}>
-                        <Text style={styles.folderPathText}>Gestionando: {currentFolder}</Text>
+                        <Text style={styles.folderPathText}>Managing: {currentFolder}</Text>
                         <TouchableOpacity style={styles.sortMenuBtn} onPress={() => setShowSortMenu(!showSortMenu)}>
                             <MaterialCommunityIcons name="sort" size={16} color="#94a3b8" />
-                            <Text style={styles.sortMenuBtnText}> Ordenar</Text>
+                            <Text style={styles.sortMenuBtnText}> Sort</Text>
                         </TouchableOpacity>
                         
                         {showSortMenu && (
                             <View style={styles.sortMenuDropdown}>
                                 <TouchableOpacity style={styles.sortMenuItem} onPress={() => { setSortMode('time'); setShowSortMenu(false); }}>
                                     <MaterialCommunityIcons name={sortMode === 'time' ? 'check' : 'blank'} size={16} color="#3b82f6" style={{marginRight: 5}}/>
-                                    <Text style={[styles.sortMenuItemText, sortMode === 'time' && {color: '#3b82f6'}]}>Por tiempo</Text>
+                                    <Text style={[styles.sortMenuItemText, sortMode === 'time' && {color: '#3b82f6'}]}>By time</Text>
                                 </TouchableOpacity>
                                 <TouchableOpacity style={styles.sortMenuItem} onPress={() => { setSortMode('type'); setShowSortMenu(false); }}>
                                     <MaterialCommunityIcons name={sortMode === 'type' ? 'check' : 'blank'} size={16} color="#3b82f6" style={{marginRight: 5}}/>
-                                    <Text style={[styles.sortMenuItemText, sortMode === 'type' && {color: '#3b82f6'}]}>Por tipo</Text>
+                                    <Text style={[styles.sortMenuItemText, sortMode === 'type' && {color: '#3b82f6'}]}>By type</Text>
                                 </TouchableOpacity>
                             </View>
                         )}
@@ -735,7 +734,7 @@ export default function App() {
                     {role === 'admin' && (
                         <TouchableOpacity onPress={handleDeleteFolder} style={styles.deleteFolderBtn}>
                             <MaterialCommunityIcons name="trash-can-outline" size={18} color="#ef4444" />
-                            <Text style={styles.deleteFolderText}> Eliminar Carpeta</Text>
+                            <Text style={styles.deleteFolderText}> Delete Folder</Text>
                         </TouchableOpacity>
                     )}
                 </View>
@@ -754,21 +753,21 @@ export default function App() {
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.gallery}
             renderItem={renderRow}
-            ListEmptyComponent={<Text style={{color:'#64748b', textAlign:'center', marginTop: 50}}>No hay archivos en esta carpeta</Text>}
+            ListEmptyComponent={<Text style={{color:'#64748b', textAlign:'center', marginTop: 50}}>No files in this folder</Text>}
             // OPTIMIZACIONES DE RENDIMIENTO
-            windowSize={7} // Renderiza 3 pantallas arriba/abajo del viewport
-            maxToRenderPerBatch={10} // Controla cuántos items se renderizan por lote
-            updateCellsBatchingPeriod={50} // Tiempo entre lotes en ms
-            initialNumToRender={12} // Renderiza 4 filas inmediatamente al inicio
-            removeClippedSubviews={true} // Mejora memoria en Android al ocultar vistas fuera de pantalla
+            windowSize={7} // Renders 3 screens above/below viewport
+            maxToRenderPerBatch={10} // Controls how many items are rendered per batch
+            updateCellsBatchingPeriod={50} // Time between batches in ms
+            initialNumToRender={12} // Renders 4 rows immediately at start
+            removeClippedSubviews={true} // Improves memory on Android by hiding off-screen views
             />
 
-            {/* Barra de progreso estática e inferior */}
+            {/* Static bottom progress bar */}
             {uploadState.active && (
                 <View style={{ position: 'absolute', bottom: 85, left: 15, right: 15, backgroundColor: '#1e293b', padding: 15, borderRadius: 12, borderWidth: 1, borderColor: '#334155', elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84 }}>
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
                         <Text style={{ color: '#fff', fontSize: 14, fontWeight: 'bold' }}>
-                            Subiendo archivo {uploadState.current} de {uploadState.total}...
+                            Uploading file {uploadState.current} of {uploadState.total}...
                         </Text>
                         <Text style={{ color: '#3b82f6', fontSize: 14, fontWeight: 'bold' }}>{uploadState.percent}%</Text>
                     </View>
@@ -784,11 +783,11 @@ export default function App() {
                     <View style={styles.uploadMenu}>
                         <TouchableOpacity style={styles.uploadMenuItem} onPress={handlePickDocument}>
                             <MaterialCommunityIcons name="file-outline" size={20} color="#fff" />
-                            <Text style={styles.uploadMenuText}>Archivos</Text>
+                            <Text style={styles.uploadMenuText}>Files</Text>
                         </TouchableOpacity>
                         <TouchableOpacity style={styles.uploadMenuItem} onPress={handlePickMedia}>
                             <MaterialCommunityIcons name="image-outline" size={20} color="#fff" />
-                            <Text style={styles.uploadMenuText}>Imágenes / Videos</Text>
+                            <Text style={styles.uploadMenuText}>Images / Videos</Text>
                         </TouchableOpacity>
                     </View>
                 )}
@@ -810,7 +809,7 @@ export default function App() {
           <View style={styles.statCard}>
              <View style={{flexDirection:'row', alignItems:'center', marginBottom: 10}}>
                 <MaterialCommunityIcons name="harddisk" size={20} color="#94a3b8" style={{marginRight:8}} />
-                <Text style={styles.statLabel}>Uso de Disco</Text>
+                <Text style={styles.statLabel}>Disk Usage</Text>
              </View>
              <View style={styles.progressBarBg}>
                 <View style={[styles.progressBarFill, { width: `${status?.disk?.percent || 0}%`, backgroundColor: (status?.disk?.percent > 90 ? '#ef4444' : '#3b82f6') }]} />
@@ -824,7 +823,7 @@ export default function App() {
           <View style={styles.statCard}>
              <View style={{flexDirection:'row', alignItems:'center', marginBottom: 10}}>
                 <MaterialCommunityIcons name="memory" size={24} color="#94a3b8" style={{marginRight:8}} />
-                <Text style={styles.statLabel}>Uso de RAM</Text>
+                <Text style={styles.statLabel}>RAM Usage</Text>
              </View>
              <View style={styles.progressBarBg}>
                 <View style={[styles.progressBarFill, { width: `${status?.ram?.percent || 0}%`, backgroundColor: (status?.ram?.percent > 85 ? '#f59e0b' : '#10b981') }]} />
@@ -838,7 +837,7 @@ export default function App() {
           <View style={styles.statCard}>
              <View style={{flexDirection:'row', alignItems:'center', marginBottom: 10}}>
                 <MaterialCommunityIcons name="folder-multiple-image" size={20} color="#94a3b8" style={{marginRight:8}} />
-                <Text style={styles.statLabel}>Archivos en Bóveda</Text>
+                <Text style={styles.statLabel}>Files in Vault</Text>
              </View>
              <Text style={styles.statValue}>{status?.vault?.file_count || 0}</Text>
              <Text style={styles.statSub}>Total: {formatBytes(status?.vault?.total_size || 0)}</Text>
@@ -900,7 +899,7 @@ export default function App() {
                                           onLoadEnd={() => setPreviewLoading(false)}
                                           onError={() => {
                                               setPreviewLoading(false);
-                                              setPreviewError("Error al cargar la imagen");
+                                              setPreviewError("Error loading image");
                                           }}
                                       />
                                   )}
@@ -924,7 +923,7 @@ export default function App() {
                                           onLoad={() => setPreviewLoading(false)}
                                           onError={(e) => {
                                               setPreviewLoading(false);
-                                              setPreviewError("Error al cargar el video");
+                                              setPreviewError("Error loading video");
                                           }}
                                       />
                                   ) : (
@@ -938,7 +937,7 @@ export default function App() {
                               <View style={styles.unsupportedCard}>
                                   <Text style={styles.unsupportedIcon}>📄</Text>
                                   <Text style={styles.unsupportedText}>Previsualización no disponible para .{ext}</Text>
-                                  <Text style={styles.unsupportedSub}>Descarga el archivo para ver su contenido.</Text>
+                                  <Text style={styles.unsupportedSub}>Download the file to see its content.</Text>
                               </View>
                           );
                       }
@@ -970,38 +969,38 @@ export default function App() {
           <Modal visible={true} transparent={true} animationType="slide" onRequestClose={() => setShowInfo(false)}>
               <View style={styles.modalBg}>
                   <View style={styles.promptCard}>
-                      <Text style={styles.promptTitle}>Información del Archivo</Text>
+                      <Text style={styles.promptTitle}>File Information</Text>
                       {infoLoading ? (
                           <ActivityIndicator size="large" color="#3b82f6" />
                       ) : fileInfo ? (
                           <View style={{ gap: 15, marginBottom: 20 }}>
                               <View>
-                                  <Text style={styles.infoLabel}>Nombre</Text>
+                                  <Text style={styles.infoLabel}>Name</Text>
                                   <Text style={styles.infoValue}>{fileInfo.name}</Text>
                               </View>
                               <View>
-                                  <Text style={styles.infoLabel}>Tamaño</Text>
+                                  <Text style={styles.infoLabel}>Size</Text>
                                   <Text style={styles.infoValue}>{formatBytes(fileInfo.size)}</Text>
                               </View>
                               <View>
-                                  <Text style={styles.infoLabel}>Fecha</Text>
+                                  <Text style={styles.infoLabel}>Date</Text>
                                   <Text style={styles.infoValue}>
-                                      {fileInfo.timestamp ? fileInfo.timestamp.replace('T', ' ').replace('Z', '') : 'Desconocida'}
+                                      {fileInfo.timestamp ? fileInfo.timestamp.replace('T', ' ').replace('Z', '') : 'Unknown'}
                                   </Text>
                               </View>
                               {fileInfo.gps && (
                                   <View>
-                                      <Text style={styles.infoLabel}>Ubicación GPS</Text>
+                                      <Text style={styles.infoLabel}>GPS Location</Text>
                                       <Text style={styles.infoValue}>Lat: {fileInfo.gps.lat.toFixed(6)}, Lon: {fileInfo.gps.lon.toFixed(6)}</Text>
                                   </View>
                               )}
                           </View>
                       ) : (
-                          <Text style={{color: '#ef4444'}}>No se pudo cargar la información.</Text>
+                          <Text style={{color: '#ef4444'}}>Could not load information.</Text>
                       )}
                       
                       <TouchableOpacity style={[styles.button, {width: '100%'}]} onPress={() => setShowInfo(false)}>
-                          <Text style={styles.buttonText}>Cerrar Info</Text>
+                          <Text style={styles.buttonText}>Close Info</Text>
                       </TouchableOpacity>
                   </View>
               </View>
@@ -1015,15 +1014,15 @@ export default function App() {
                    <TouchableOpacity style={styles.drawerOverlay} onPress={() => setDrawerOpen(false)} />
                    <View style={styles.drawerContent}>
                        <View style={styles.drawerHeader}>
-                           <Text style={styles.drawerTitle}>Menú</Text>
+                           <Text style={styles.drawerTitle}>Menu</Text>
                            <TouchableOpacity onPress={() => setDrawerOpen(false)}>
                                <Text style={{color:'#64748b', fontSize: 20}}>✕</Text>
                            </TouchableOpacity>
                        </View>
 
                        <View style={styles.drawerUserInfo}>
-                           <Text style={styles.drawerRoleLabel}>Usuario</Text>
-                           <Text style={styles.drawerRoleValue}>{role === 'admin' ? 'Administrador' : 'Estándar'}</Text>
+                           <Text style={styles.drawerRoleLabel}>User</Text>
+                           <Text style={styles.drawerRoleValue}>{role === 'admin' ? 'Administrator' : 'Standard'}</Text>
                        </View>
 
                        <View style={styles.drawerDivider} />
@@ -1033,7 +1032,7 @@ export default function App() {
                            onPress={() => { setView('stats'); setDrawerOpen(false); }}
                        >
                            <MaterialCommunityIcons name="monitor-dashboard" size={24} color="#3b82f6" style={styles.drawerItemIcon} />
-                           <Text style={styles.drawerItemText}>Panel de Control</Text>
+                           <Text style={styles.drawerItemText}>Control Panel</Text>
                        </TouchableOpacity>
 
                        {role === 'admin' && (
@@ -1042,7 +1041,7 @@ export default function App() {
                                onPress={() => { setInviteConfigModal(true); setDrawerOpen(false); }}
                            >
                                <MaterialCommunityIcons name="account-plus-outline" size={24} color="#10b981" style={styles.drawerItemIcon} />
-                               <Text style={styles.drawerItemText}>Invitar Usuario</Text>
+                               <Text style={styles.drawerItemText}>Invitar User</Text>
                            </TouchableOpacity>
                        )}
 
@@ -1061,8 +1060,8 @@ export default function App() {
            <Modal visible={true} transparent={true} animationType="fade">
                <View style={styles.modalBg}>
                    <View style={styles.promptCard}>
-                       <Text style={styles.promptTitle}>Configurar Invitación</Text>
-                       <Text style={styles.promptSub}>Selecciona las carpetas a las que tendrá acceso el invitado:</Text>
+                       <Text style={styles.promptTitle}>Configure Invitation</Text>
+                       <Text style={styles.promptSub}>Select the folders the guest will have access to:</Text>
                        
                        <View style={{maxHeight: 300, marginVertical: 15}}>
                            <FlatList 
@@ -1074,7 +1073,7 @@ export default function App() {
                                        onPress={() => toggleInviteFolder(f)}
                                    >
                                        <Text style={[styles.folderSelectItemText, selectedInviteFolders.includes(f) && styles.folderSelectItemTextActive]}>
-                                           {f === 'root' ? 'Línea de Tiempo (Todo)' : f}
+                                           {f === 'root' ? 'Timeline (Everything)' : f}
                                        </Text>
                                        {selectedInviteFolders.includes(f) && <Text style={{color:'#fff'}}>✓</Text>}
                                    </TouchableOpacity>
@@ -1091,7 +1090,7 @@ export default function App() {
                                onPress={handleCreateInvite}
                                disabled={selectedInviteFolders.length === 0}
                            >
-                               <Text style={styles.buttonText}>Generar QR</Text>
+                               <Text style={styles.buttonText}>Generate QR</Text>
                            </TouchableOpacity>
                        </View>
                    </View>
@@ -1104,9 +1103,9 @@ export default function App() {
             <Modal visible={true} transparent={true} animationType="slide">
                <View style={styles.modalBg}>
                     <View style={[styles.qrCard, { padding: 30, backgroundColor: '#0f172a', borderColor: '#334155', borderWidth: 1, alignItems: 'center' }]}>
-                        <Text style={[styles.qrTitle, { fontSize: 24, marginBottom: 10, color: '#f8fafc' }]}>Invitación Creada</Text>
+                        <Text style={[styles.qrTitle, { fontSize: 24, marginBottom: 10, color: '#f8fafc' }]}>Invitation Created</Text>
                         <Text style={[styles.qrText, { textAlign: 'center', color: '#94a3b8', marginBottom: 20, fontSize: 14 }]}>
-                            El invitado debe escanear este código o introducir los datos manualmente.
+                            The guest must scan this code or enter the data manually.
                         </Text>
                         
                         <View style={{ backgroundColor: '#fff', padding: 10, borderRadius: 12, marginBottom: 20 }}>
@@ -1118,19 +1117,19 @@ export default function App() {
                         </View>
 
                         <View style={{ width: '100%', backgroundColor: '#1e293b', padding: 15, borderRadius: 12, marginBottom: 20, borderColor: '#334155', borderWidth: 1 }}>
-                            <Text style={{ color: '#64748b', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 5 }}>URL del Servidor</Text>
+                            <Text style={{ color: '#64748b', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 5 }}>Server URL</Text>
                             <Text style={{ color: '#60a5fa', fontSize: 16, fontWeight: '500', marginBottom: 15, textAlign: 'center' }} numberOfLines={2} adjustsFontSizeToFit>
                                 {inviteData.url}
                             </Text>
 
-                            <Text style={{ color: '#64748b', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 5 }}>PIN de Acceso</Text>
+                            <Text style={{ color: '#64748b', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 5 }}>Access PIN</Text>
                             <Text style={{ color: '#10b981', fontSize: 32, fontWeight: 'bold', letterSpacing: 4, textAlign: 'center' }}>
                                 {inviteData.pin}
                             </Text>
                         </View>
 
                         <TouchableOpacity style={{ width: '100%', padding: 16, backgroundColor: '#3b82f6', borderRadius: 8, alignItems: 'center' }} onPress={() => setInviteModal(false)}>
-                            <Text style={{color:'#fff', fontWeight:'bold', fontSize: 16}}>Aceptar</Text>
+                            <Text style={{color:'#fff', fontWeight:'bold', fontSize: 16}}>Accept</Text>
                         </TouchableOpacity>
                     </View>
                </View>
@@ -1142,12 +1141,12 @@ export default function App() {
             <Modal visible={true} transparent={true} animationType="fade">
                <View style={styles.modalBg}>
                     <View style={styles.promptCard}>
-                        <Text style={styles.promptTitle}>Nueva Carpeta</Text>
-                        <Text style={styles.promptSub}>Introduce el nombre de la nueva carpeta para organizar tus archivos.</Text>
+                        <Text style={styles.promptTitle}>New Folder</Text>
+                        <Text style={styles.promptSub}>Enter the name of the new folder to organize your files.</Text>
                         
                         <TextInput 
                             style={[styles.input, {marginVertical: 20, width: '100%'}]} 
-                            placeholder="Nombre de la carpeta" 
+                            placeholder="Folder name" 
                             placeholderTextColor="#64748b" 
                             value={newFolderName} 
                             onChangeText={setNewFolderName} 
@@ -1157,14 +1156,14 @@ export default function App() {
 
                         <View style={{flexDirection:'row', gap: 10}}>
                             <TouchableOpacity style={[styles.button, {flex:1, backgroundColor:'#334155'}]} onPress={() => {setNewFolderModal(false); setNewFolderName('');}}>
-                                <Text style={styles.buttonText}>Cancelar</Text>
+                                <Text style={styles.buttonText}>Cancel</Text>
                             </TouchableOpacity>
                             <TouchableOpacity 
                                 style={[styles.button, {flex:1}, !newFolderName.trim() && styles.buttonDisabled]} 
                                 onPress={handleCreateFolder}
                                 disabled={!newFolderName.trim()}
                             >
-                                <Text style={styles.buttonText}>Crear</Text>
+                                <Text style={styles.buttonText}>Create</Text>
                             </TouchableOpacity>
                         </View>
                     </View>

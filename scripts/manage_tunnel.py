@@ -7,7 +7,7 @@ from pathlib import Path
 def update_env(public_url):
     env_path = Path(".env")
     if not env_path.exists():
-        print("[!] No se encontró el archivo .env")
+        print("[!] .env file not found")
         return
 
     content = env_path.read_text()
@@ -26,15 +26,15 @@ def update_env(public_url):
         new_lines.append(f"PUBLIC_URL={public_url}")
         
     env_path.write_text("\n".join(new_lines))
-    print(f"[*] Archivo .env actualizado con: {public_url}")
+    print(f"[*] .env file updated with: {public_url}")
 
 def start_tunnel():
-    print("[*] Iniciando túnel de Cloudflare...")
+    print("[*] Starting Cloudflare tunnel...")
     port = os.getenv("API_PORT", "8000")
     
-    # Intentar usar cloudflared directamente
+    # Try to use cloudflared directly
     try:
-        # Iniciamos un túnel efímero (Quick Tunnel)
+        # Start an ephemeral tunnel (Quick Tunnel)
         process = subprocess.Popen(
             ["cloudflared", "tunnel", "--url", f"http://localhost:{port}"],
             stdout=subprocess.PIPE,
@@ -47,7 +47,7 @@ def start_tunnel():
         for line in process.stdout:
             print(line, end="")
             if "trycloudflare.com" in line:
-                # Extraer la URL
+                # Extract the URL
                 parts = line.split()
                 for p in parts:
                     if "https://" in p and "trycloudflare.com" in p:
@@ -55,14 +55,14 @@ def start_tunnel():
                         break
             if url:
                 update_env(url)
-                print(f"\n[✔] TÚNEL LISTO: {url}")
-                print("[*] Ahora puedes generar un código QR desde la app y funcionará en cualquier sitio.")
+                print(f"\n[✔] TUNNEL READY: {url}")
+                print("[*] You can now generate a QR code from the app and it will work anywhere.")
                 break
                 
         process.wait()
     except FileNotFoundError:
-        print("[!] Error: 'cloudflared' no está instalado en el sistema.")
-        print("[*] Descárgalo de: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/install-run/")
+        print("[!] Error: 'cloudflared' is not installed on the system.")
+        print("[*] Download it from: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/install-run/")
     except Exception as e:
         print(f"[!] Error: {e}")
 
