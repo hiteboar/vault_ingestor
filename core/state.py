@@ -7,8 +7,8 @@ from typing import Any, Dict, Optional, List
 
 class ChatStateStore:
     """
-    Estado por chat persistente:
-      - context (carpeta)
+    Persistent per-chat state:
+      - context (folder)
       - require_original (bool)
       - access (dict): {folder_name: tag}
     """
@@ -41,19 +41,7 @@ class ChatStateStore:
            self._state[chat_id]["access"] = {}
         return self._state[chat_id]
 
-    # ---- Global Settings ----
-    def get_global_setting(self, key: str, default: Any) -> Any:
-        if "_global" not in self._state:
-            return default
-        return self._state["_global"].get(key, default)
-
-    def set_global_setting(self, key: str, value: Any) -> None:
-        if "_global" not in self._state:
-            self._state["_global"] = {}
-        self._state["_global"][key] = value
-        self._save()
-
-    # ---- Context (carpeta) ----
+    # ---- Context (folder) ----
     def get_context(self, chat_id: str, default: str) -> str:
         chat = self._chat(chat_id)
         ctx = chat.get("context")
@@ -100,7 +88,7 @@ class ChatStateStore:
             self._save()
 
     # ---- Invitations & Access ----
-    def create_invite(self, folder: str, tag: str = "invitado") -> str:
+    def create_invite(self, folder: str, tag: str = "guest") -> str:
         if "_invites" not in self._state:
             self._state["_invites"] = {}
         
@@ -146,17 +134,19 @@ class ChatStateStore:
         info = invites.pop(code)
         if isinstance(info, str):
             folder = info
-            tag = "invitado_legacy"
+            tag = "guest_legacy"
         else:
             folder = info["folder"]
             tag = info["tag"]
         
         chat = self._chat(chat_id)
+        if "access" not in chat:
+            chat["access"] = {}
         chat["access"][folder] = {
             "tag": tag,
             "created_at": info.get("created_at") if isinstance(info, dict) else datetime.datetime.now(datetime.timezone.utc).isoformat()
         }
-        # Limpiar campo antiguo
+        # Clean up old field
         chat.pop("allowed_folders", None)
             
         self._save()
@@ -171,14 +161,14 @@ class ChatStateStore:
         return []
 
     def is_user_allowed(self, chat_id: str) -> bool:
-        """Determina si un usuario tiene algún tipo de acceso (invitación activa)."""
+        """Determines if a user has any type of access (active invitation)."""
         self._prune_access(chat_id)
         chat = self._chat(chat_id)
         access = chat.get("access", {})
         return bool(access and isinstance(access, dict))
 
     def _prune_access(self, chat_id: str) -> None:
-        """Elimina accesos que han caducado (si se desea que el acceso dure lo mismo que la invitación)."""
+        """Removes expired access (if access duration should match invitation duration)."""
         chat = self._chat(chat_id)
         access = chat.get("access", {})
         if not isinstance(access, dict):
@@ -188,7 +178,7 @@ class ChatStateStore:
         to_delete = []
         for folder, info in access.items():
             if not isinstance(info, dict) or "created_at" not in info:
-                # Si no tiene metadatos o no es el formato nuevo, lo dejamos (retrocompatibilidad)
+                # If no metadata or old format, keep it (retrocompatibility)
                 continue
             try:
                 created_at = datetime.datetime.fromisoformat(info["created_at"])
@@ -209,7 +199,7 @@ class ChatStateStore:
             "active": []
         }
         
-        # Pendientes
+        # Pending
         for code, info in self._state.get("_invites", {}).items():
             if isinstance(info, dict):
                 report["pending"].append({
@@ -219,13 +209,13 @@ class ChatStateStore:
                     "created_at": info.get("created_at")
                 })
             
-        # Activos
+        # Active
         for chat_id, data in self._state.items():
             if chat_id.startswith("_") or not isinstance(data, dict):
                 continue
             access = data.get("access", {})
-            for folder, data in access.items():
-                tag = data.get("tag", "invitado") if isinstance(data, dict) else data
+            for folder, folder_data in access.items():
+                tag = folder_data.get("tag", "guest") if isinstance(folder_data, dict) else folder_data
                 report["active"].append({
                     "chat_id": chat_id,
                     "folder": folder,
@@ -234,24 +224,24 @@ class ChatStateStore:
         return report
 
     def revoke_access(self, target: str) -> bool:
-        """Revoca por chat_id o por tag."""
+        """Revokes access by chat_id or tag."""
         changed = False
         
-        # Caso 1: target es un chat_id exacto (numérico como string)
+        # Case 1: target is an exact chat_id (numeric as string)
         if target in self._state and isinstance(self._state[target], dict):
             if "access" in self._state[target]:
                 self._state[target].pop("access", None)
                 changed = True
         
-        # Caso 2: target es un tag
+        # Case 2: target is a tag
         for chat_id, data in self._state.items():
             if chat_id.startswith("_") or not isinstance(data, dict):
                 continue
             access = data.get("access", {})
             if isinstance(access, dict):
                 to_remove = []
-                for f, data in access.items():
-                    tag = data.get("tag") if isinstance(data, dict) else data
+                for f, folder_data in access.items():
+                    tag = folder_data.get("tag") if isinstance(folder_data, dict) else folder_data
                     if tag == target:
                         to_remove.append(f)
                 

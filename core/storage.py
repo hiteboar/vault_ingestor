@@ -30,10 +30,10 @@ def atomic_write(dest: Path, stream, fsync: bool = True) -> None:
         if fsync:
             os.fsync(f.fileno())
 
-    os.replace(tmp, dest)  # rename atómico
+    os.replace(tmp, dest)  # Atomic rename
 
 def sanitize_context(name: str) -> str:
-    # permite letras, números, guiones y underscores; espacios -> "_"
+    # Allows letters, numbers, hyphens and underscores; spaces -> "_"
     out = []
     for ch in (name or "").strip():
         if ch.isalnum() or ch in ("-", "_"):
@@ -56,7 +56,7 @@ def build_destination(base_dir: Path, media: IncomingMedia, context: str = "defa
 
     ext = ext_from_content_type(media.content_type, formats_dict=formats_dict)
 
-    # id estable por mensaje/archivo
+    # Stable ID per message/file
     seed = f"{media.source}|{media.sender_id}|{media.external_ids}".encode("utf-8", errors="ignore")
     h = hashlib.sha256(seed).hexdigest()[:12]
 

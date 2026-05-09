@@ -1,7 +1,15 @@
 python-dotenv==1.0.1
 requests==2.32.3
-python-telegram-bot==21.6
-google-generativeai==0.8.3
 fastapi==0.115.0
 uvicorn==0.30.6
 fastapi-cors==0.0.6
+psutil==5.9.8
+pywebview==5.0.5
+pystray==0.19.3
+Pillow==10.4.0
+pytest==8.2.2
+httpx==0.27.0
+qrcode==7.4.2
+cryptography==42.0.5
+python-multipart==0.0.9
+pycloudflared==0.3.0

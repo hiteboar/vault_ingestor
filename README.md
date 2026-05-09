@@ -1,196 +1,84 @@
-# Raspi Vault Ingestor 🛡️📦
+# Vault Ingestor - Tu Nube Privada y Descentralizada 🛡️📁
 
-A lightweight, personal **media ingestor and vault** designed for home servers, personal computers, or Raspberry Pi devices. This project allows you to capture, organize, and secure your files effortlessly via a Telegram Bot interface while maintaining 100% control over your data.
+Vault Ingestor es un ecosistema avanzado de almacenamiento personal diseñado específicamente para funcionar de forma autónoma en una Raspberry Pi (o cualquier servidor Linux). El objetivo principal es proporcionar una alternativa privada a los servicios de nube comerciales, permitiéndote gestionar tus archivos, fotos y vídeos desde una aplicación móvil con total seguridad y sin configuraciones de red complejas.
 
-## 🚀 Key Features
-
-- **Automated Organization**: Files are sorted by **Year/Month** by default.
-- **Custom Folders (Contexts)**: Create specific directories for events, trips, or projects.
-- **Deduplication**: Built-in hash-based detection to prevent storing identical files twice.
-- **Telegram Interface**: Complete control through a robust set of bot commands.
-- **Invitation System**: Securely invite other users to upload or access specific folders without granting full server access.
-- **Secure Vault**: An isolated storage area for sensitive files with tagged retrieval.
-- **Media Preview**: Quickly browse through images stored in any folder directly from Telegram.
-- **Original Quality**: Toggle between original uncompressed documents and standard photo uploads.
+### Objetivos Principales:
+*   **Privacidad Total:** Tus datos nunca salen de tu hardware.
+*   **Acceso Global sin Complicaciones:** Gracias a los túneles de Cloudflare, puedes acceder a tu servidor desde cualquier parte del mundo sin abrir puertos en tu router.
+*   **Gestión Móvil Nativa:** Controla todo el sistema (usuarios, carpetas, estadísticas) desde una app moderna.
+*   **Resiliencia:** Diseñado para funcionar 24/7 sin monitor (Headless), recuperándose automáticamente de fallos de red o reinicios.
 
 ---
 
-## 📋 Requirements
+## 🛠️ Manual de Instalación
 
-- **Python 3.9+**
-- **Git**
-- **Telegram Bot Token** (from [@BotFather](https://t.me/botfather))
+Esta guía está diseñada para que puedas desplegar el sistema en cualquier dispositivo con Linux, como una Raspberry Pi.
+
+### 1. Preparación e Instalación Básica
+Clona el repositorio en tu dispositivo y ejecuta el instalador automático:
+
+```bash
+bash install_vault.sh
+```
+*Este script instalará las dependencias necesarias (Python, FFmpeg, etc.), configurará el entorno virtual y te pedirá la ruta donde quieres guardar los archivos.*
+
+### 2. Configuración de Almacenamiento Externo (Recomendado)
+Para usar un disco duro externo como unidad principal de almacenamiento, sigue estos pasos:
+
+1.  **Identifica tu disco:** Conecta el disco y ejecuta `lsblk`. Identifica tu partición (ej: `/dev/sda1`).
+2.  **Crea un punto de montaje:**
+    ```bash
+    sudo mkdir -p /mnt/vault_storage
+    ```
+3.  **Monta el disco:**
+    ```bash
+    sudo mount /dev/sda1 /mnt/vault_storage
+    ```
+4.  **Asegura el montaje automático (FSTAB):** Para que el disco se monte solo al reiniciar, edita el archivo `/etc/fstab`:
+    ```bash
+    # Obtén el UUID de tu disco
+    sudo blkid /dev/sda1
+    # Añade esta línea al final de /etc/fstab (reemplaza el UUID)
+    UUID=tu-uuid-aqui /mnt/vault_storage ext4 defaults,nofail 0 2
+    ```
+5.  **Configura Vault:** Asegúrate de que en tu archivo `.env` la variable `STORAGE_DIR` apunte a `/mnt/vault_storage`.
+
+### 3. Configuración de Arranque Automático
+Para garantizar que el sistema se inicie solo cada vez que enciendas la Raspberry Pi, ejecuta el script de reparación que configura el servicio de sistema (`systemd`):
+
+```bash
+bash version_pi/tools/repair_system.sh
+```
+*Este comando crea un servicio llamado `vault_ingestor.service` que se encarga de vigilar el sistema y reiniciarlo automáticamente si detecta algún fallo.*
 
 ---
 
-## 🛠️ Installation
+## 📱 Guía de Uso y Funcionalidades
 
-### 1. Clone the repository
-```bash
-git clone https://github.com/your-username/vault-ingestor.git
-cd vault-ingestor
-```
+El sistema se gestiona íntegramente desde la aplicación móvil.
 
-### 2. Setup Virtual Environment
-```bash
-python -m venv venv
-# Linux / macOS
-source venv/bin/activate
-# Windows
-.\venv\Scripts\activate
-```
+### 1. Descarga de la App
+Actualmente, la aplicación se puede obtener de dos formas:
+*   **Para Usuarios:** Descarga el archivo `.apk` generado en la sección de "Releases" o compílalo tú mismo usando el comando `npx eas build -p android --profile preview` en la carpeta `vault_mobile`.
+*   **Para Desarrolladores:** Instala [Expo Go](https://expo.dev/go) en tu móvil, entra en la carpeta `vault_mobile`, haz `npm install` y luego `npx expo start`.
 
-### 3. Install Dependencies
-```bash
-pip install -r requirements.txt
-```
+### 2. Vincular la App con el Sistema
+Una vez instalada la app:
+1.  Inicia el servidor en la Raspberry Pi ejecutando `./run_vault.sh`.
+2.  Aparecerá un **Código QR** y un **PIN** en la terminal.
+3.  Abre la app en tu móvil y pulsa en **"Escanear QR"**.
+4.  El primer dispositivo en vincularse será nombrado automáticamente como **Administrador**.
 
-### 4. Configuration
-Create a `.env` file from the example:
-```bash
-cp .env.example .env
-```
+### 3. Funcionalidades Implementadas
 
-Edit your `.env` with the following variables:
-- `TELEGRAM_BOT_TOKEN`: Your Bot Token from @BotFather.
-- `STORAGE_DIR`: Absolute path where files will be stored.
-- `ALLOWED_CHAT_IDS`: Comma-separated list of Telegram User IDs allowed to use the bot.
-- `DEFAULT_CONTEXT`: Folder name for default uploads (e.g., `default`).
-- `META_LOG`: (Optional) Path to the metadata journal file.
-- `MAX_BYTES`: (Optional) Maximum file size in bytes (0 for no limit).
-- `ALLOW_COMPRESSED_PHOTOS`: (Optional) Set to `true` to allow regular photo uploads by default.
+*   **Panel de Estadísticas:** Visualiza en tiempo real el uso de CPU, RAM y espacio en disco de tu Raspberry Pi.
+*   **Gestión de Roles:**
+    *   **Admin:** Puede crear/borrar carpetas, ver todo el contenido y generar invitaciones.
+    *   **Invitado (Standard):** Solo tiene acceso a las carpetas específicas para las que ha sido invitado.
+*   **Invitaciones P2P:** El Administrador puede generar un código QR temporal desde una carpeta. Un invitado escanea ese código y obtiene acceso instantáneo a esa carpeta sin necesidad de crear cuentas.
+*   **Streaming de Vídeo y Previsualización:** El sistema optimiza las imágenes y vídeos para que puedas verlos de forma fluida incluso con conexiones móviles.
+*   **Subida Masiva:** Soporta la selección de múltiples archivos desde la galería del móvil para subidas rápidas.
 
 ---
 
-## 🤖 Usage & Bot Commands
-
-Start the bot:
-```bash
-python app.py
-```
-
-### Authorization & Sharing
-| Command | Description |
-|:--- |:--- |
-| `/invite <folder>` | (Admin only) Generates a unique invitation code for a specific folder. |
-| `/join <code>` | Use a code to gain access to a shared folder. |
-
-### Folder Management
-| Command | Description |
-|:--- |:--- |
-| `/setfolder <name>` | Switch to a specific folder. Creates it if it doesn't exist. |
-| `/folder` | Show the currently active folder. |
-| `/folders` | List all custom folders you have access to. |
-| `/clearfolder` | Reset to the default structure. |
-
-### File Retrieval & Media
-| Command | Description |
-|:--- |:--- |
-| `/preview <folder> [pag]` | Browse thumbnails of images in a folder. |
-| `/download <filename>` | Search and download a specific file. |
-| `/downloadfolder <name>` | Export an entire folder as a `.zip` archive. |
-
-### Security & Vault
-| Command | Description |
-|:--- |:--- |
-| `/vaultadd <tag>` | Prepare to save the next file securely in the Vault under `<tag>`. |
-| `/vaultget <tag>` | Retrieve a file from the Vault by its tag. |
-| `/vaultlist` | List all secrets saved in the Vault. |
-| `/vaultdelete <tag>` | Remove a secret from the Vault (requires confirmation). |
-| `/delete <path>` | Delete a file or folder in the general storage (requires confirmation). |
-
-### System
-| Command | Description |
-|:--- |:--- |
-| `/original on\|off` | Toggle requirement for uncompressed "File" uploads. |
-| `/help` | Display command list and current status. |
-
----
-
-## 📂 Storage Structure
-
-By default, the server organizes files as follows:
-```text
-storage/
- ├── 2026/
- │   ├── 03/
- │   │   └── file.jpg
- ├── trips/           <-- Custom Folder
- │   └── vacation.mp4
- └── _vault/          <-- Isolated Secrets
-     └── passport.pdf
-```
-
----
-
-## ⚙️ Running as a Service (Linux)
-
-To keep the ingestor running in the background, create a systemd service:
-
-1. Create `/etc/systemd/system/vault.service`:
-```ini
-[Unit]
-Description=Vault Ingestor Bot
-After=network.target
-
-[Service]
-User=your-user
-WorkingDirectory=/path/to/vault-ingestor
-ExecStart=/path/to/vault-ingestor/venv/bin/python app.py
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
-
-2. Enable and start:
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable vault.service
-sudo systemctl start vault.service
-```
-
----
-
-## 🔄 Updating
-
-To update to the latest version of the code:
-
-```bash
-# Get the latest changes
-git pull
-
-# Update dependencies if needed
-pip install -r requirements.txt
-
-# Restart the service (if using systemd)
-sudo systemctl restart vault.service
-```
-
----
-
-## 🗑️ Uninstalling
-
-To completely remove the project:
-
-1. **Stop and remove the service** (if installed):
-```bash
-sudo systemctl stop vault.service
-sudo systemctl disable vault.service
-sudo rm /etc/systemd/system/vault.service
-sudo systemctl daemon-reload
-```
-
-2. **Remove the project directory**:
-```bash
-cd ..
-rm -rf vault-ingestor
-```
-
-*(Note: This will not delete your `STORAGE_DIR` unless it was located inside the project folder.)*
-
----
-
-## 📄 License
-
-This project is open-source under the MIT License. See `LICENSE` for details.
+*Desarrollado con ❤️ para la comunidad de auto-hospedaje.*

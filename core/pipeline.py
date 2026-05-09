@@ -19,23 +19,23 @@ def process_one(
     allowed_prefixes: Optional[List[str]] = None,
 ) -> tuple[Path, bool, str | None, str | None]:
     """
-    Devuelve:
+    Returns:
       (path_to_report, is_duplicate, existing_path_if_duplicate, sha256_hex)
-    - Si es duplicado: el archivo recién descargado se borra y path_to_report apunta al existente.
+    - If duplicate: the newly downloaded file is deleted and path_to_report points to the existing one.
     """
 
     prefixes = allowed_prefixes if allowed_prefixes is not None else ALLOWED_PREFIXES
     if not any(media.content_type.startswith(p) for p in prefixes):
-        # Si no está en los prefijos, checkeamos si está en el mapeo explícito
+        # If not in prefixes, check explicit mapping
         valid_formats = formats_dict if formats_dict is not None else {}
         if media.content_type not in valid_formats:
-            raise ValueError(f"Tipo no permitido: {media.content_type}")
+            raise ValueError(f"Disallowed type: {media.content_type}")
 
     if max_bytes is not None and max_bytes > 0:
         if media.size_bytes is not None and media.size_bytes > max_bytes:
-            raise ValueError(f"Archivo demasiado grande: {media.size_bytes} > {max_bytes}")
+            raise ValueError(f"File too large: {media.size_bytes} > {max_bytes}")
 
-    # Guardamos primero
+    # Save first
     saved_path = save_media(base_dir, media, context=context, fsync=True, formats_dict=formats_dict)
 
     is_dup = False
@@ -49,7 +49,7 @@ def process_one(
 
         if existing:
             is_dup = True
-            # No guardamos duplicado: borramos el recién guardado
+            # Don't save duplicate: delete the newly saved one
             saved_path.unlink(missing_ok=True)
             path_to_report = Path(existing)
         else:
