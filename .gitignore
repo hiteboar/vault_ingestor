@@ -112,6 +112,8 @@ _tmp/
 state/
 dedup/
 _vault/
+vault_internal/
+*.service
 tests/
 .gemini/
 

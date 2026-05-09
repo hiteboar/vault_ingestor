@@ -42,22 +42,31 @@ if [ -d "/mnt/vault" ]; then
     sudo chmod -R 775 "/mnt/vault" 2>/dev/null
 fi
 
-echo "[*] Managing vault_ingestor service..."
-SERVICE_NAME="vault_ingestor"
+echo "[*] Managing vault services..."
+API_SERVICE="vault_api"
+BOT_SERVICE="vault_bot"
 
-if systemctl list-unit-files | grep -q "$SERVICE_NAME"; then
-    if systemctl is-active --quiet "$SERVICE_NAME"; then
-        echo "[*] Service was already running. Restarting to apply changes..."
-        sudo systemctl restart "$SERVICE_NAME"
-    else
-        echo "[*] Starting service..."
-        sudo systemctl start "$SERVICE_NAME"
+# Restart API
+if systemctl list-unit-files | grep -q "$API_SERVICE"; then
+    echo "[*] Restarting API service..."
+    sudo systemctl restart "$API_SERVICE"
+else
+    echo "[!] Warning: systemd service ($API_SERVICE) is not installed."
+    pkill -f "python.*app.py --mode api" 2>/dev/null
+    nohup .venv/bin/python app.py --mode api >> "$PROJECT_DIR/api.log" 2>&1 &
+fi
+
+# Ensure Bot is running
+if systemctl list-unit-files | grep -q "$BOT_SERVICE"; then
+    if ! systemctl is-active --quiet "$BOT_SERVICE"; then
+        echo "[*] Starting Bot service..."
+        sudo systemctl start "$BOT_SERVICE"
     fi
 else
-    echo "[!] Warning: systemd service ($SERVICE_NAME) is not installed."
-    echo "[*] Starting manually in the background..."
-    pkill -f "python.*app.py" 2>/dev/null
-    nohup .venv/bin/python app.py >> "$PROJECT_DIR/app.log" 2>&1 &
+    if ! pgrep -f "python.*app.py --mode bot" > /dev/null; then
+        echo "[*] Starting Bot manually in the background..."
+        nohup .venv/bin/python app.py --mode bot >> "$PROJECT_DIR/bot.log" 2>&1 &
+    fi
 fi
 
 echo "[*] Waiting for the system to be ready (Cloudflare Tunnel)..."

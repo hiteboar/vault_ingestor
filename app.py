@@ -1,6 +1,7 @@
 import os
 import sys
 import subprocess
+import threading
 from pathlib import Path
 from dotenv import load_dotenv
 import uvicorn
@@ -25,11 +26,12 @@ def bootstrap():
 
     load_dotenv()
 
-    # 2. Check critical dependencies (only if not in frozen/EXE mode)
+    # 2. Check critical dependencies
     if not getattr(sys, 'frozen', False):
         try:
             import fastapi
             import pycloudflared
+            import telegram
         except ImportError:
             print("[*] Installing necessary dependencies...")
             try:
@@ -38,31 +40,125 @@ def bootstrap():
             except Exception as e:
                 print(f"[!] Error installing dependencies: {e}")
 
+def run_telegram_bot(storage_dir, meta_log):
+    """Initializes and runs the Telegram Bot in a separate thread."""
+    try:
+        from core.housekeeping import cleanup_part_files
+        from core.state import ChatStateStore
+        from core.dedup import HashIndex
+        from core.agent import VaultAgent
+        from core.manager import UpdateManager
+        from adapters.telegram_adapter import TelegramAdapter
+
+        token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+        if not token:
+            print("[telegram] Skip: No TELEGRAM_BOT_TOKEN found.")
+            return
+
+        # Configuration
+        max_bytes = int(os.getenv("MAX_BYTES", "0"))
+        max_bytes = None if max_bytes <= 0 else max_bytes
+
+        def parse_allowed_chat_ids(raw: str) -> set[int] | None:
+            raw = (raw or "").strip()
+            if not raw: return None
+            return {int(part.strip()) for part in raw.split(",") if part.strip()}
+
+        allowed_chat_ids = parse_allowed_chat_ids(os.getenv("ALLOWED_CHAT_IDS", ""))
+        default_context = os.getenv("DEFAULT_CONTEXT", "root") # Align with MobileApp 'root'
+
+        def parse_bool(raw: str, default: bool) -> bool:
+            if raw is None: return default
+            s = raw.strip().lower()
+            if s in ("1", "true", "yes", "on"): return True
+            if s in ("0", "false", "no", "off"): return False
+            return default
+
+        allow_compressed_default = parse_bool(os.getenv("ALLOW_COMPRESSED_PHOTOS", "true"), True)
+        require_original_default = not allow_compressed_default
+
+        # Initialize components
+        storage_dir.mkdir(parents=True, exist_ok=True)
+        cleanup_part_files(storage_dir)
+
+        state_path = storage_dir / "state" / "chat_settings.json"
+        state_store = ChatStateStore(state_path)
+        hash_index = HashIndex(storage_dir / "dedup" / "hash_index.json")
+
+        # Optional AI Agent
+        agent = None
+        gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+        if gemini_key:
+            from core.agent import DEFAULT_MODEL
+            ai_model = os.getenv("AI_MODEL", "").strip() or DEFAULT_MODEL
+            stored_model = state_store.get_global_setting("agent_model", ai_model) if hasattr(state_store, 'get_global_setting') else ai_model
+            agent = VaultAgent(gemini_key, model_name=stored_model, storage_dir=str(storage_dir))
+            print(f"[telegram] AI Agent active ({agent.model_name}).")
+
+        update_manager = UpdateManager(Path(".").resolve(), storage_dir)
+
+        adapter = TelegramAdapter(
+            token=token,
+            base_dir=storage_dir,
+            meta_log=meta_log,
+            state_store=state_store,
+            hash_index=hash_index,
+            default_context=default_context,
+            require_original_default=require_original_default,
+            allowed_chat_ids=allowed_chat_ids,
+            max_bytes=max_bytes,
+            agent=agent,
+            update_manager=update_manager,
+            env_path=Path(".env").resolve()
+        )
+        print("[telegram] Bot starting...")
+        adapter.run()
+    except Exception as e:
+        print(f"[telegram] Critical error: {e}")
+
 def main():
     bootstrap()
     
+    import argparse
+    parser = argparse.ArgumentParser(description="Vault Ingestor Dual System")
+    parser.add_argument("--mode", choices=["api", "bot", "both"], default="both", help="Execution mode")
+    args_parsed = parser.parse_args()
+
     # Load basic configuration
     host = os.getenv("API_HOST", "0.0.0.0")
     port = int(os.getenv("API_PORT", "8001"))
     storage_dir = Path(os.getenv("STORAGE_DIR", "./vault_storage")).resolve()
+    meta_log = Path(os.getenv("META_LOG", str(storage_dir / "metadata.jsonl"))).resolve()
 
     print("\n" + "="*42)
-    print("      Vault Ingestor - Storage System")
+    print(f"      Vault Ingestor - Mode: {args_parsed.mode.upper()}")
     print("="*42)
     print(f"[*] Storage: {storage_dir}")
-    print(f"[*] Local Server: http://{host}:{port}")
     
     # Ensure storage directory exists
     storage_dir.mkdir(parents=True, exist_ok=True)
 
-    # Start FastAPI server
-    # The server is located in api/main.py as 'app'
-    try:
-        uvicorn.run("api.main:app", host=host, port=port, reload=False)
-    except KeyboardInterrupt:
-        print("\n[*] System stopped by user.")
-    except Exception as e:
-        print(f"\n[!] Critical error: {e}")
+    if args_parsed.mode in ["bot", "both"]:
+        print(f"[*] Starting Telegram Bot...")
+        threading.Thread(target=run_telegram_bot, args=(storage_dir, meta_log), daemon=True).start()
+
+    if args_parsed.mode in ["api", "both"]:
+        print(f"[*] Starting Local API: http://{host}:{port}")
+        try:
+            uvicorn.run("api.main:app", host=host, port=port, reload=False)
+        except KeyboardInterrupt:
+            print("\n[*] API stopped by user.")
+        except Exception as e:
+            print(f"\n[!] API Critical error: {e}")
+    else:
+        # If only bot is running, we need to keep the main thread alive
+        print("[*] Bot running. Press Ctrl+C to stop.")
+        try:
+            while True:
+                import time
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\n[*] Bot stopped by user.")
 
 if __name__ == "__main__":
-    main()
+    main()

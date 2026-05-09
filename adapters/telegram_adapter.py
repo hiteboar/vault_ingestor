@@ -1,6 +1,8 @@
 from __future__ import annotations
+import os
+import asyncio
 from datetime import datetime, timezone
-from typing import Iterator, Optional, Set
+from typing import Iterator, Optional, Set, List
 import re
 import random
 
@@ -11,8 +13,6 @@ import shutil
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Iterator, Optional, Set, List
-
 import requests
 
 from core.models import IncomingMedia
@@ -43,6 +43,8 @@ class TelegramAdapter:
     ):
         self.token = token
         self.base_dir = base_dir
+        self.upload_dir = base_dir / "uploaded_files"
+        self.upload_dir.mkdir(parents=True, exist_ok=True)
         self.meta_log = meta_log
         self.state_store = state_store
         self.hash_index = hash_index
@@ -56,6 +58,7 @@ class TelegramAdapter:
         self.bot = Bot(token)
         self.reduced_mode = reduced_mode
         self.reduced_mode_error = reduced_mode_error
+        self.commands_enabled = False # New flag to disable commands for testing
 
     def _is_allowed(self, update: Update) -> bool:
         if not self.allowed_chat_ids:
@@ -78,32 +81,25 @@ class TelegramAdapter:
             return True
             
         return False
-
     def _list_named_contexts(self) -> list[str]:
         contexts = set()
-        system_dirs = {"_tmp", "state", "dedup", "_vault"}
         try:
-            for p in self.base_dir.iterdir():
+            if not self.upload_dir.exists():
+                return []
+            for p in self.upload_dir.iterdir():
                 if not p.is_dir():
                     continue
                 name = p.name
-                # Ocultar carpetas ocultas (.) y carpetas de sistema/vault
-                if name.startswith(".") or name in system_dirs or "vault" in name.lower():
+                # Ocultar carpetas ocultas (.)
+                if name.startswith("."):
                     continue
-                # Ocultar carpetas que son solo números (buckets por fecha)
+                
+                # Ocultar carpetas que son solo números (buckets por fecha en root)
                 if re.match(r"^\d{4}$", name):
                     continue
                 
-                # Ocultar carpetas vacías
-                try:
-                    contains_files = any(f.is_file() for f in p.iterdir())
-                    if not contains_files:
-                        continue
-                except Exception:
-                    continue
-
                 ctx = sanitize_context(name)
-                if ctx and ctx != "default":
+                if ctx and ctx != "root":
                     contexts.add(ctx)
         except Exception:
             pass
@@ -270,7 +266,7 @@ class TelegramAdapter:
         if not is_admin and ctx not in allowed_folders:
             return True
             
-        target_dir = self.base_dir / ctx
+        target_dir = self.upload_dir / ctx
         
         if target_dir.exists() and target_dir.is_dir() and ctx != self.state_store.get_context(chat_id, self.default_context):
             self.state_store.set_pending_action(chat_id, {"action": "confirm_setfolder", "folder": ctx})
@@ -346,7 +342,9 @@ class TelegramAdapter:
             await msg.reply_text("⚠️ Estás en la carpeta 'default'. Especifica una carpeta: /downloadfolder <carpeta>")
             return True
         
-        target_dir = self.base_dir / folder_name
+        target_dir = self.upload_dir / folder_name
+        if folder_name == "root":
+             target_dir = self.upload_dir # Or specifically handle root
         
         if not target_dir.exists() or not target_dir.is_dir():
             await msg.reply_text(f"❌ La carpeta '{folder_name}' no existe.")
@@ -405,7 +403,7 @@ class TelegramAdapter:
         if not found_path:
             await msg.reply_text(f"🔍 Buscando '{target}'...")
             try:
-                for p in self.base_dir.rglob(target):
+                for p in self.upload_dir.rglob(target):
                     if p.is_file():
                         found_path = p
                         break
@@ -444,7 +442,7 @@ class TelegramAdapter:
         target_name = args
         found_path = None
         try:
-            for p in self.base_dir.rglob(target_name):
+            for p in self.upload_dir.rglob(target_name):
                 if p.name == target_name:
                     found_path = p
                     break
@@ -466,7 +464,7 @@ class TelegramAdapter:
                 await msg.reply_text("⛔ Error de permisos.")
                 return True
         
-        rel_path = found_path.relative_to(self.base_dir).as_posix()
+        rel_path = found_path.relative_to(self.upload_dir).as_posix()
         
         self.state_store.set_pending_action(chat_id, {
             "action": "confirm_delete",
@@ -564,7 +562,9 @@ class TelegramAdapter:
             await msg.reply_text(f"⛔ No tienes permiso para acceder a la carpeta '{folder_name}'.")
             return True
             
-        target_dir = self.base_dir / folder_name
+        target_dir = self.upload_dir / folder_name
+        if folder_name == "root":
+             target_dir = self.upload_dir
         
         if not target_dir.exists() or not target_dir.is_dir():
             await msg.reply_text(f"❌ La carpeta '{folder_name}' no existe.")
@@ -573,7 +573,8 @@ class TelegramAdapter:
         image_extensions = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
         images: List[Path] = []
         try:
-            for p in target_dir.iterdir():
+            # We search recursively to include date-based subfolders in root
+            for p in target_dir.rglob("*"):
                 if p.is_file() and p.suffix.lower() in image_extensions:
                     images.append(p)
         except Exception as e:
@@ -828,7 +829,9 @@ class TelegramAdapter:
             await msg.reply_text(f"⛔ No tienes permiso para acceder a la carpeta '{folder_name}'.")
             return True
             
-        target_dir = self.base_dir / folder_name
+        target_dir = self.upload_dir / folder_name
+        if folder_name == "root":
+             target_dir = self.upload_dir
         
         if not target_dir.exists() or not target_dir.is_dir():
             await msg.reply_text(f"❌ La carpeta '{folder_name}' no existe.")
@@ -849,7 +852,7 @@ class TelegramAdapter:
             
         files.sort()
         lines = "\n".join(files)
-        await msg.reply_text(f"📂 Archivos en '{folder_name}':\n{lines}")
+        await msg.reply_text(f"📂 Archivos en '{folder_name}' (relativo a uploaded_files):\n{lines}")
         return True
 
     async def _cmd_help(self, msg, chat_id: str, is_admin: bool) -> bool:
@@ -950,7 +953,14 @@ class TelegramAdapter:
         is_admin = self._is_admin(update)
         allowed_folders = set(self.state_store.get_allowed_folders(chat_id))
 
-        if command == "/invite":
+        # Command blocking for testing
+        if not self.commands_enabled and command not in ["/help", "/resetservice", "/join"]:
+             await msg.reply_text("⚠️ Los comandos están desactivados temporalmente por mantenimiento (fase de pruebas).")
+             return True
+
+        if command == "/resetservice":
+            return await self._cmd_resetservice(msg, is_admin)
+        elif command == "/invite":
             return await self._cmd_invite(msg, args, is_admin)
         elif command == "/access":
             return await self._cmd_access(msg, is_admin)
@@ -1341,7 +1351,7 @@ class TelegramAdapter:
 
         try:
             path_to_report, is_dup, _, _ = process_one(
-                self.base_dir,
+                self.upload_dir,
                 self.meta_log,
                 media,
                 context=ctx,
@@ -1351,7 +1361,7 @@ class TelegramAdapter:
                 allowed_prefixes=self.state_store.get_global_setting("allowed_prefixes", None),
             )
 
-            rel = path_to_report.relative_to(self.base_dir)
+            rel = path_to_report.relative_to(self.upload_dir)
 
             if is_dup:
                 await msg.reply_text(
@@ -1370,17 +1380,118 @@ class TelegramAdapter:
             await msg.reply_text(f"❌ Error guardando: {e}")
             print(f"[error] {e}")
 
+    async def _cmd_resetservice(self, msg, is_admin: bool) -> bool:
+        if not is_admin:
+            await msg.reply_text("⛔ Solo administradores pueden reiniciar el servicio.")
+            return True
+            
+        chat_id = str(msg.chat_id)
+        # 1. Guardar estado para después del reinicio
+        try:
+            reset_file = self.base_dir / "state" / ".reset_pending"
+            reset_file.write_text(chat_id, encoding="utf-8")
+        except Exception as e:
+            await msg.reply_text(f"❌ Error al preparar el reinicio: {e}")
+            return True
+
+        await msg.reply_text("🔄 Ejecutando `run_vault.sh`...\nEl sistema se reiniciará. Te enviaré el acceso en cuanto vuelva a estar en línea.", parse_mode="Markdown")
+        
+        try:
+            import subprocess
+            # Ejecutar el script y dejar que el sistema nos reinicie
+            subprocess.Popen(["bash", "run_vault.sh"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        except Exception as e:
+            await msg.reply_text(f"❌ Error al lanzar el script: {e}")
+            if reset_file.exists(): reset_file.unlink()
+            
+        return True
+
     def run(self) -> None:
         app = Application.builder().token(self.token).build()
         app.add_handler(MessageHandler(filters.ALL, self._handle_message))
+        app.add_handler(CallbackQueryHandler(self._on_callback_query))
         print(f"[telegram] Bot arrancado (polling). ReducedMode={self.reduced_mode}")
         
         async def send_startup_alerts(application: Application):
+            # 1. Notificación estándar de arranque
+            startup_msg = "🤖 *Vault Bot está en línea*"
+            if not self.commands_enabled:
+                 startup_msg += "\n⚠️ _Modo mantenimiento: Comandos desactivados._"
+            
+            for admin_id in self.allowed_chat_ids:
+                try: 
+                    await application.bot.send_message(chat_id=admin_id, text=startup_msg, parse_mode="Markdown")
+                except: pass
+
+            # 2. Verificar si venimos de un /resetservice
+            reset_file = self.base_dir / "state" / ".reset_pending"
+            if reset_file.exists():
+                try:
+                    target_chat = reset_file.read_text().strip()
+                    reset_file.unlink() # Limpiar ya
+                    
+                    await application.bot.send_message(chat_id=target_chat, text="⏳ El servicio se ha reiniciado. Obteniendo datos de acceso...")
+                    
+                    # Intentar obtener el QR (reintentar varias veces mientras arranca la API)
+                    import json, qrcode, io, requests, time
+                    
+                    port = int(os.getenv("API_PORT", "8001"))
+                    recovery_param = ""
+                    recovery_file = Path("vault_internal/.recovery_token")
+                    if recovery_file.exists():
+                        recovery_param = f"?recovery={recovery_file.read_text().strip()}"
+                    
+                    api_url = f"http://localhost:{port}/api/auth/request{recovery_param}"
+                    
+                    data = None
+                    for _ in range(10): # 10 intentos
+                        try:
+                            resp = requests.get(api_url, timeout=5)
+                            if resp.status_code == 200:
+                                data = resp.json()
+                                break
+                            elif resp.status_code == 403:
+                                await application.bot.send_message(chat_id=target_chat, text="⚠️ El sistema ha arrancado pero el dispositivo administrador ya está vinculado.")
+                                return
+                        except:
+                            await asyncio.sleep(3)
+                    
+                    if data:
+                        url = data['url']
+                        pin = data['pin']
+                        
+                        qr = qrcode.QRCode(version=1, box_size=10, border=1)
+                        qr.add_data(json.dumps({"url": url, "pin": pin}))
+                        qr.make(fit=True)
+                        img = qr.make_image(fill_color="black", back_color="white")
+                        
+                        img_byte_arr = io.BytesIO()
+                        img.save(img_byte_arr, format='PNG')
+                        img_byte_arr.seek(0)
+                        
+                        await application.bot.send_photo(
+                            chat_id=target_chat,
+                            photo=img_byte_arr,
+                            caption=(
+                                "✅ *ResetService Completado*\n\n"
+                                f"🔗 *URL:* `{url}`\n"
+                                f"🔢 *PIN:* `{pin}`\n\n"
+                                "Sistema listo y sincronizado."
+                            ),
+                            parse_mode="Markdown"
+                        )
+                    else:
+                        await application.bot.send_message(chat_id=target_chat, text="❌ Error: El sistema arrancó pero no se pudo obtener el nuevo código de emparejamiento.")
+                        
+                except Exception as e:
+                    print(f"[error] Reset startup logic: {e}")
+
+            # 3. Alerta de almacenamiento reducido (si aplica)
             if self.reduced_mode:
-                alert = f"🚨 *ALERTA DE ARRANQUE*\n\nError: `{self.reduced_mode_error}`"
+                alert = f"🚨 *ALERTA DE ALMACENAMIENTO*\n\nError: `{self.reduced_mode_error}`"
                 for admin_id in self.allowed_chat_ids:
                     try: await application.bot.send_message(chat_id=admin_id, text=alert, parse_mode="Markdown")
                     except: pass
         
         app.post_init = send_startup_alerts
-        app.run_polling(close_loop=False)
+        app.run_polling(close_loop=False)
