@@ -25,7 +25,7 @@ python setup.py
 # 4. Ofrecer instalar el servicio systemd
 echo ""
 read -p "❓ ¿Deseas instalar el servicio systemd para arranque automático? (y/n): " install_service
-if [[ "$install_service" == "y" || "$install_service" == "Y" ]]; then
+if [ "$install_service" = "y" ] || [ "$install_service" = "Y" ]; then
     # Ajustar paths en los service units
     WORKING_DIR=$(pwd)
     VENV_PYTHON="${WORKING_DIR}/.venv/bin/python"
