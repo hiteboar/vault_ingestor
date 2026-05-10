@@ -55,7 +55,7 @@ class TelegramAdapter:
         self.bot = Bot(token)
         self.reduced_mode = reduced_mode
         self.reduced_mode_error = reduced_mode_error
-        self.commands_enabled = False # New flag to disable commands for testing
+        self.commands_enabled = True # New flag to disable commands for testing
 
     def _is_allowed(self, update: Update) -> bool:
         if not self.allowed_chat_ids:
@@ -810,7 +810,7 @@ class TelegramAdapter:
             help_text += "/original on|off     → Calidad de imagen (ON/OFF)\n"
             help_text += "/status              → Ver estado del sistema y disco\n"
             help_text += "/formats <list|add|remove> → Gestionar formatos permitidos\n"
-            help_text += "/restore\_stable      → Recuperar última versión estable\n"
+            help_text += "/restore\\_stable      → Recuperar última versión estable\n"
         
         help_text += "/help                → Muestra este menú\n\n"
         help_text += "*Nota:* Si no especificas <carpeta> en los comandos marcados con '?', se usará tu carpeta activa."
