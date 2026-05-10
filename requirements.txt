@@ -13,3 +13,4 @@ qrcode==7.4.2
 cryptography==42.0.5
 python-multipart==0.0.9
 pycloudflared==0.3.0
+python-telegram-bot==21.6

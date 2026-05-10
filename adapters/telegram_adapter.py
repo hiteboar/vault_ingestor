@@ -20,7 +20,6 @@ from core.pipeline import process_one
 from core.state import ChatStateStore
 from core.storage import sanitize_context, atomic_write, ext_from_content_type, CONTENT_TYPE_EXT
 from core.dedup import HashIndex
-from core.agent import VaultAgent
 from core.env_manager import add_allowed_chat_id, remove_allowed_chat_id
 
 class TelegramAdapter:
@@ -35,7 +34,6 @@ class TelegramAdapter:
         require_original_default: bool = False,
         allowed_chat_ids: Optional[Set[int]] = None,
         max_bytes: Optional[int] = None,
-        agent: Optional[VaultAgent] = None,
         update_manager=None,
         env_path: Optional[Path] = None,
         reduced_mode: bool = False,
@@ -52,7 +50,6 @@ class TelegramAdapter:
         self.require_original_default = require_original_default
         self.allowed_chat_ids = allowed_chat_ids or set()
         self.max_bytes = max_bytes
-        self.agent = agent
         self.update_manager = update_manager
         self.env_path = env_path or Path(".env")
         self.bot = Bot(token)
@@ -690,117 +687,6 @@ class TelegramAdapter:
             await msg.reply_text(f"❌ No se encontró ningún acceso con: '{target}'")
         return True
 
-    async def _cmd_admin(self, msg, chat_id: str, is_admin: bool) -> bool:
-        if not is_admin:
-            await msg.reply_text("⛔ El comando /admin es solo para administradores.")
-            return True
-        if not self.agent:
-            await msg.reply_text("⚠️ El Agente IA no está configurado (falta GEMINI_API_KEY).")
-            return True
-            
-        pending = self.state_store.get_pending_action(chat_id)
-        if pending and pending.get("action") == "admin_session":
-            self.state_store.clear_pending_action(chat_id)
-            self.agent.clear_session(chat_id)
-            await msg.reply_text("🤖 Sesión con el Agente finalizada.")
-        else:
-            self.state_store.set_pending_action(chat_id, {"action": "admin_session"})
-            
-            # Registrar puente para comandos de la app
-            async def execute_app_command_bridge(command: str) -> str:
-                return await self._execute_agent_command(chat_id, command)
-            
-            self.agent.register_tool("execute_app_command", execute_app_command_bridge)
-            
-            # Registrar herramientas de actualización
-            if self.update_manager:
-                async def stage_file_bridge(relative_path: str, content: str) -> str:
-                    self.update_manager.stage_file(relative_path, content)
-                    return f"Archivo {relative_path} preparado en staging."
-                
-                async def verify_update_bridge() -> str:
-                    ok, msg = self.update_manager.verify_staging()
-                    return f"Verificación: {'OK' if ok else 'ERROR'}\n{msg}"
-                
-                async def apply_update_bridge() -> str:
-                    # Guardamos intención de aplicar, pero requerimos confirmación vía chat normal
-                    # (o el agente puede pedirla y luego llamar a esto)
-                    # Por seguridad, el agente prepara todo y el usuario 'acepta' el cambio definitivo.
-                    self.state_store.set_pending_action(chat_id, {"action": "confirm_apply_update"})
-                    return "⚠️ Actualización preparada. Por favor, confirma en el chat escribiendo 'ACEPTAR ACTUALIZACION' para reiniciar el sistema con el nuevo código."
-
-                self.agent.register_tool("stage_file", stage_file_bridge)
-                self.agent.register_tool("verify_update", verify_update_bridge)
-                self.agent.register_tool("apply_update", apply_update_bridge)
-
-            await msg.reply_text(
-                "🤖 *Agente IA Activado*\n"
-                "Ahora puedes enviarme peticiones directas. Puedo analizar archivos, "
-                "darte estadísticas de almacenamiento o realizar operaciones complejas.\n\n"
-                "También puedo ejecutar comandos de Telegram directamente si lo necesito.\n\n"
-                "_Usa /admin de nuevo para salir._",
-                parse_mode="Markdown"
-            )
-        return True
-
-    async def _execute_agent_command(self, chat_id: str, command_text: str) -> str:
-        """
-        Ejecuta un comando de la aplicación simulando una petición de usuario.
-        Retorna el resultado de la ejecución (o confirmación).
-        """
-        if not command_text.startswith("/"):
-            command_text = "/" + command_text
-        
-        print(f"[agent_bridge] Ejecutando comando: {command_text}")
-        
-        # Mock objects for the command handlers
-        class MockMessage:
-            def __init__(self, cid, bot):
-                self.chat_id = cid
-                self.bot = bot
-                self.replies = []
-            
-            async def reply_text(self, text, parse_mode=None, **kwargs):
-                self.replies.append(text)
-                await self.bot.send_message(chat_id=self.chat_id, text=text, parse_mode=parse_mode, **kwargs)
-                return None
-            
-            async def reply_document(self, document, filename=None, **kwargs):
-                self.replies.append(f"Documento enviado: {filename or document}")
-                await self.bot.send_document(chat_id=self.chat_id, document=document, filename=filename, **kwargs)
-                return None
-                
-            @property
-            def text(self): return command_text
-            
-        class MockUpdate:
-            def __init__(self, msg):
-                self.effective_message = msg
-                self.effective_chat = type('obj', (object,), {'id': int(chat_id), 'type': 'private'})
-                self.effective_user = type('obj', (object,), {'id': int(chat_id), 'full_name': 'Admin (Agent)'})
-
-        from telegram.ext import ContextTypes
-        # We need a proper application context to send messages
-        # Since we are inside the adapter, we might have access to the app's bot
-        # but the run_polling loop is separate. 
-        # For now, let's assume we can use a basic bot instance if we have the token.
-        from telegram import Bot
-        bot = Bot(self.token)
-        
-        mock_msg = MockMessage(chat_id, bot)
-        mock_update = MockUpdate(mock_msg)
-        
-        # Use a dummy context
-        # In a real scenario, we might want to capture the actual context if possible
-        # but for simple command execution, this should suffice.
-        
-        success = await self._handle_command(mock_update, None)
-        
-        if success:
-            return "\n".join(mock_msg.replies) if mock_msg.replies else "Comando ejecutado con éxito."
-        else:
-            return f"Error: Comando '{command_text}' no reconocido o no permitido."
-
     async def _cmd_restore_stable(self, msg, is_admin: bool) -> bool:
         if not is_admin:
             await msg.reply_text("⛔ Solo administradores pueden restaurar versiones stable.")
@@ -922,8 +808,6 @@ class TelegramAdapter:
         help_text += "🔧 *Configuración*\n"
         if is_admin:
             help_text += "/original on|off     → Calidad de imagen (ON/OFF)\n"
-            help_text += "/admin               → Iniciar sesión con el Agente IA\n"
-            help_text += "/agent_model <m>     → Cambiar modelo de Gemini\n"
             help_text += "/status              → Ver estado del sistema y disco\n"
             help_text += "/formats <list|add|remove> → Gestionar formatos permitidos\n"
             help_text += "/restore\_stable      → Recuperar última versión estable\n"
@@ -966,8 +850,6 @@ class TelegramAdapter:
             return await self._cmd_access(msg, is_admin)
         elif command == "/revoke":
             return await self._cmd_revoke(msg, args, is_admin)
-        elif command == "/admin":
-            return await self._cmd_admin(msg, chat_id, is_admin)
         elif command == "/join":
             return await self._cmd_join(msg, chat_id, args)
         elif command == "/setfolder":
@@ -998,8 +880,6 @@ class TelegramAdapter:
             return await self._cmd_preview(msg, chat, chat_id, args, is_admin, allowed_folders, context)
         elif command == "/vaultlist":
             return await self._cmd_vaultlist(msg, is_admin)
-        elif command == "/agent_model":
-            return await self._cmd_agent_model(msg, args, is_admin)
         elif command == "/status":
             return await self._cmd_status(msg, chat_id, is_admin)
         elif command == "/formats":
@@ -1011,40 +891,6 @@ class TelegramAdapter:
 
         return False
 
-    async def _cmd_agent_model(self, msg, args: str, is_admin: bool) -> bool:
-        from core.agent import DEFAULT_MODEL
-        if not is_admin:
-            await msg.reply_text("⛔ Solo administradores.")
-            return True
-        if not args:
-            current = self.state_store.get_global_setting("agent_model", DEFAULT_MODEL)
-            await msg.reply_text(f"🤖 Modelo actual: `{current}`\nUsa `/agent_model <nombre>` para cambiarlo.", parse_mode="Markdown")
-            return True
-        
-        new_model = args.strip()
-        if not self.agent:
-            await msg.reply_text("❌ El agente no está disponible (falta API KEY).")
-            return True
-
-        # Guardar el anterior por si acaso
-        old_model = self.agent.model_name
-        
-        try:
-            await msg.reply_text(f"⏳ Validando modelo `{new_model}`...", parse_mode="Markdown")
-            self.agent.set_model(new_model)
-            if self.agent.test_model():
-                self.state_store.set_global_setting("agent_model", new_model)
-                await msg.reply_text(f"✅ Modelo cambiado a: `{new_model}`", parse_mode="Markdown")
-            else:
-                # Revertir
-                self.agent.set_model(old_model)
-                await msg.reply_text(f"❌ El modelo `{new_model}` no parece ser válido o accesible. Revertido a `{old_model}`.", parse_mode="Markdown")
-        except Exception as e:
-            if self.agent:
-                self.agent.set_model(old_model)
-            await msg.reply_text(f"❌ Error al cambiar modelo: {e}\nRevertido a `{old_model}`.")
-        return True
-
     async def _cmd_status(self, msg, chat_id: str, is_admin: bool) -> bool:
         # reportar solo si es admin
         if not is_admin:
@@ -1054,7 +900,6 @@ class TelegramAdapter:
         # Carpeta actual del chat
         ctx = self.state_store.get_context(chat_id, self.default_context)
         require_orig = self.state_store.get_require_original(chat_id, self.require_original_default)
-        model = self.state_store.get_global_setting("agent_model", "gemini-1.5-flash-latest")
 
         # Espacio en disco
         total, used, free = shutil.disk_usage(self.base_dir)
@@ -1064,7 +909,6 @@ class TelegramAdapter:
             "📊 *Estado del Sistema*\n\n"
             f"📁 *Carpeta activa:* `{ctx}`\n"
             f"💎 *Originales:* `{'ON' if require_orig else 'OFF'}`\n"
-            f"🤖 *Modelo IA:* `{model}`\n"
             f"📂 *Ruta base:* `{self.base_dir}`\n\n"
             f"💾 *Disco:* {pct:.1f}% ocupado\n"
             f"└ Total: {total / (1024**3):.1f} GB\n"
@@ -1222,13 +1066,6 @@ class TelegramAdapter:
                 elif msg.text.strip().lower() in ("no", "cancelar", "n"):
                     self.state_store.clear_pending_action(chat_id)
                     await msg.reply_text("❌ Actualización cancelada.")
-                    return
-
-            elif pending.get("action") == "admin_session" and msg.text:
-                if not msg.text.startswith("/"): # Ignorar comandos si estamos en sesión
-                    await msg.reply_chat_action("typing")
-                    response = await self.agent.chat(chat_id, msg.text)
-                    await msg.reply_text(response)
                     return
 
         sender = update.effective_user

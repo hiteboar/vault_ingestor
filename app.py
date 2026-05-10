@@ -5,6 +5,42 @@ import threading
 from pathlib import Path
 from dotenv import load_dotenv
 import uvicorn
+import time
+
+def is_storage_ready(path: Path) -> tuple[bool, str]:
+    """
+    Checks if the storage path is valid, mounted (if applicable), and writable.
+    Returns (True, "") or (False, "Error message").
+    """
+    try:
+        # 1. Existence check
+        if not path.exists():
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                return False, f"La carpeta no existe y no pudo crearse: {e}"
+
+        # 2. Mount check (Linux only, for paths in /mnt or /media)
+        if os.name == "posix":
+            p_str = str(path.resolve())
+            if p_str.startswith("/mnt/") or p_str.startswith("/media/"):
+                if not os.path.ismount(p_str):
+                    # Check if it's empty. If it's not empty, maybe it IS the drive but ismount fails?
+                    # Usually better to trust ismount or check for a hidden .vault file.
+                    if not any(path.iterdir()):
+                        return False, f"El punto de montaje {p_str} existe pero NO está montado."
+
+        # 3. Writable check
+        test_file = path / ".write_test"
+        try:
+            test_file.touch()
+            test_file.unlink()
+        except Exception as e:
+            return False, f"El almacenamiento no tiene permisos de escritura: {e}"
+
+        return True, ""
+    except Exception as e:
+        return False, f"Error validando almacenamiento: {e}"
 
 def bootstrap():
     """Ensures the environment is ready before starting."""
@@ -40,7 +76,8 @@ def bootstrap():
             except Exception as e:
                 print(f"[!] Error installing dependencies: {e}")
 
-def run_telegram_bot(storage_dir, meta_log):
+def run_telegram_bot(storage_dir, meta_log, reduced_mode=False, reduced_mode_error=None):
+    """Initializes and runs the Telegram Bot in a separate thread."""
     """Initializes and runs the Telegram Bot in a separate thread."""
     try:
         from core.housekeeping import cleanup_part_files
@@ -85,15 +122,8 @@ def run_telegram_bot(storage_dir, meta_log):
         state_store = ChatStateStore(state_path)
         hash_index = HashIndex(storage_dir / "dedup" / "hash_index.json")
 
-        # Optional AI Agent
+        # AI Agent disabled as per user request
         agent = None
-        gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
-        if gemini_key:
-            from core.agent import DEFAULT_MODEL
-            ai_model = os.getenv("AI_MODEL", "").strip() or DEFAULT_MODEL
-            stored_model = state_store.get_global_setting("agent_model", ai_model) if hasattr(state_store, 'get_global_setting') else ai_model
-            agent = VaultAgent(gemini_key, model_name=stored_model, storage_dir=str(storage_dir))
-            print(f"[telegram] AI Agent active ({agent.model_name}).")
 
         update_manager = UpdateManager(Path(".").resolve(), storage_dir)
 
@@ -109,7 +139,9 @@ def run_telegram_bot(storage_dir, meta_log):
             max_bytes=max_bytes,
             agent=agent,
             update_manager=update_manager,
-            env_path=Path(".env").resolve()
+            env_path=Path(".env").resolve(),
+            reduced_mode=reduced_mode,
+            reduced_mode_error=reduced_mode_error
         )
         print("[telegram] Bot starting...")
         adapter.run()
@@ -135,12 +167,17 @@ def main():
     print("="*42)
     print(f"[*] Storage: {storage_dir}")
     
-    # Ensure storage directory exists
-    storage_dir.mkdir(parents=True, exist_ok=True)
+    # Validate storage
+    storage_ready, storage_error = is_storage_ready(storage_dir)
+    reduced_mode = not storage_ready
+    
+    if reduced_mode:
+        print(f"\n[!] STORAGE WARNING: {storage_error}")
+        print("[!] Bot will start in REDUCED MODE.")
 
     if args_parsed.mode in ["bot", "both"]:
         print(f"[*] Starting Telegram Bot...")
-        threading.Thread(target=run_telegram_bot, args=(storage_dir, meta_log), daemon=True).start()
+        threading.Thread(target=run_telegram_bot, args=(storage_dir, meta_log, reduced_mode, storage_error), daemon=True).start()
 
     if args_parsed.mode in ["api", "both"]:
         print(f"[*] Starting Local API: http://{host}:{port}")
