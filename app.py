@@ -83,7 +83,6 @@ def run_telegram_bot(storage_dir, meta_log, reduced_mode=False, reduced_mode_err
         from core.housekeeping import cleanup_part_files
         from core.state import ChatStateStore
         from core.dedup import HashIndex
-        from core.agent import VaultAgent
         from core.manager import UpdateManager
         from adapters.telegram_adapter import TelegramAdapter
 
@@ -122,8 +121,6 @@ def run_telegram_bot(storage_dir, meta_log, reduced_mode=False, reduced_mode_err
         state_store = ChatStateStore(state_path)
         hash_index = HashIndex(storage_dir / "dedup" / "hash_index.json")
 
-        # AI Agent disabled as per user request
-        agent = None
 
         update_manager = UpdateManager(Path(".").resolve(), storage_dir)
 
@@ -137,7 +134,6 @@ def run_telegram_bot(storage_dir, meta_log, reduced_mode=False, reduced_mode_err
             require_original_default=require_original_default,
             allowed_chat_ids=allowed_chat_ids,
             max_bytes=max_bytes,
-            agent=agent,
             update_manager=update_manager,
             env_path=Path(".env").resolve(),
             reduced_mode=reduced_mode,
