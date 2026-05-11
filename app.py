@@ -78,7 +78,11 @@ def bootstrap():
 
 def run_telegram_bot(storage_dir, meta_log, reduced_mode=False, reduced_mode_error=None):
     """Initializes and runs the Telegram Bot in a separate thread."""
-    """Initializes and runs the Telegram Bot in a separate thread."""
+    import asyncio
+    # Create and set a new event loop for this thread
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
     try:
         from core.housekeeping import cleanup_part_files
         from core.state import ChatStateStore
