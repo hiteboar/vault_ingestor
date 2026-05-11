@@ -1331,4 +1331,5 @@ class TelegramAdapter:
                     except: pass
         
         app.post_init = send_startup_alerts
-        app.run_polling(close_loop=False)
+        app.run_polling(close_loop=False, stop_signals=None)
+

@@ -175,11 +175,13 @@ def main():
         print(f"\n[!] STORAGE WARNING: {storage_error}")
         print("[!] Bot will start in REDUCED MODE.")
 
-    if args_parsed.mode in ["bot", "both"]:
-        print(f"[*] Starting Telegram Bot...")
+    if args_parsed.mode == "bot":
+        print(f"[*] Starting Telegram Bot (Main Thread)...")
+        run_telegram_bot(storage_dir, meta_log, reduced_mode, storage_error)
+    elif args_parsed.mode == "both":
+        print(f"[*] Starting Telegram Bot (Background Thread)...")
         threading.Thread(target=run_telegram_bot, args=(storage_dir, meta_log, reduced_mode, storage_error), daemon=True).start()
-
-    if args_parsed.mode in ["api", "both"]:
+        
         print(f"[*] Starting Local API: http://{host}:{port}")
         try:
             uvicorn.run("api.main:app", host=host, port=port, reload=False)
@@ -187,15 +189,14 @@ def main():
             print("\n[*] API stopped by user.")
         except Exception as e:
             print(f"\n[!] API Critical error: {e}")
-    else:
-        # If only bot is running, we need to keep the main thread alive
-        print("[*] Bot running. Press Ctrl+C to stop.")
+    elif args_parsed.mode == "api":
+        print(f"[*] Starting Local API: http://{host}:{port}")
         try:
-            while True:
-                import time
-                time.sleep(1)
+            uvicorn.run("api.main:app", host=host, port=port, reload=False)
         except KeyboardInterrupt:
-            print("\n[*] Bot stopped by user.")
+            print("\n[*] API stopped by user.")
+        except Exception as e:
+            print(f"\n[!] API Critical error: {e}")
 
 if __name__ == "__main__":
     main()
