@@ -1317,6 +1317,109 @@ class TelegramAdapter:
             
         return True
 
+    async def _notify_reset_complete(self, target_chat: str, application: Optional[Application] = None):
+        """Espera a que la API esté lista y envía el QR al usuario."""
+        # Usar el bot de la aplicación si se proporciona, si no el bot interno
+        bot = application.bot if application else self.bot
+        reset_file = self.base_dir / "state" / ".reset_pending"
+
+        # Verificar si otro proceso ya lo gestionó (para evitar duplicados)
+        if not reset_file.exists():
+            return
+
+        print(f"[reset] Iniciando espera de API para chat {target_chat}...")
+        try:
+            # Notificar que estamos en ello
+            await bot.send_message(chat_id=target_chat, text="⏳ El sistema se está reiniciando. Te avisaré en cuanto la conexión esté lista...")
+
+            import json, qrcode, io, requests, time
+            port = int(os.getenv("API_PORT", "8001"))
+            recovery_param = ""
+            recovery_file = Path("vault_internal/.recovery_token")
+            if recovery_file.exists():
+                recovery_param = f"?recovery={recovery_file.read_text().strip()}"
+            
+            api_url = f"http://localhost:{port}/api/auth/request{recovery_param}"
+            
+            data = None
+            for i in range(20): # Hasta 60 segundos de espera
+                if not reset_file.exists(): # Si otro proceso (como un bot reiniciado) ya lo borró, paramos
+                    return
+                try:
+                    resp = requests.get(api_url, timeout=5)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        break
+                    elif resp.status_code == 403:
+                        await bot.send_message(chat_id=target_chat, text="⚠️ El sistema ha arrancado pero el dispositivo administrador ya está vinculado.")
+                        if reset_file.exists(): reset_file.unlink()
+                        return
+                except:
+                    await asyncio.sleep(3)
+            
+            if data and reset_file.exists():
+                url = data['url']
+                pin = data['pin']
+                
+                qr = qrcode.QRCode(version=1, box_size=10, border=1)
+                qr.add_data(json.dumps({"url": url, "pin": pin}))
+                qr.make(fit=True)
+                img = qr.make_image(fill_color="black", back_color="white")
+                
+                img_byte_arr = io.BytesIO()
+                img.save(img_byte_arr, format='PNG')
+                img_byte_arr.seek(0)
+                
+                await bot.send_photo(
+                    chat_id=target_chat,
+                    photo=img_byte_arr,
+                    caption=(
+                        "✅ *Sistema Listo*\n\n"
+                        f"🔗 *URL:* `{url}`\n"
+                        f"🔢 *PIN:* `{pin}`\n\n"
+                        "Ya puedes vincular tu dispositivo móvil."
+                    ),
+                    parse_mode="Markdown"
+                )
+                if reset_file.exists(): reset_file.unlink()
+            elif reset_file.exists():
+                await bot.send_message(chat_id=target_chat, text="❌ La API tardó demasiado en responder. Prueba a usar `/status` en unos momentos.")
+                if reset_file.exists(): reset_file.unlink()
+                
+        except Exception as e:
+            print(f"[error] Notify reset failure: {e}")
+
+    async def _cmd_resetservice(self, msg, is_admin: bool) -> bool:
+        if not is_admin:
+            await msg.reply_text("⛔ Solo administradores pueden reiniciar el servicio.")
+            return True
+            
+        chat_id = str(msg.chat_id)
+        # 1. Guardar estado para persistencia
+        try:
+            reset_file = self.base_dir / "state" / ".reset_pending"
+            reset_file.parent.mkdir(parents=True, exist_ok=True)
+            reset_file.write_text(chat_id, encoding="utf-8")
+        except Exception as e:
+            await msg.reply_text(f"❌ Error al preparar el reinicio: {e}")
+            return True
+
+        await msg.reply_text("🔄 Reiniciando API de almacenamiento...", parse_mode="Markdown")
+        
+        try:
+            import subprocess
+            # Ejecutar el script (esto reinicia la API pero NO el bot)
+            subprocess.Popen(["bash", "run_vault.sh"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            
+            # Lanzar tarea de espera en segundo plano (para que funcione sin reiniciar el bot)
+            asyncio.create_task(self._notify_reset_complete(chat_id))
+            
+        except Exception as e:
+            await msg.reply_text(f"❌ Error al lanzar el script: {e}")
+            if reset_file.exists(): reset_file.unlink()
+            
+        return True
+
     def run(self) -> None:
         async def send_startup_alerts(application: Application):
             print("[startup] Ejecutando alertas de inicio...")
@@ -1331,75 +1434,14 @@ class TelegramAdapter:
                 except Exception as e:
                     print(f"[startup] Error enviando saludo a {admin_id}: {e}")
 
-            # 2. Verificar si venimos de un /resetservice
+            # 2. Verificar si venimos de un /resetservice (tras un reinicio real del proceso)
             reset_file = self.base_dir / "state" / ".reset_pending"
-            print(f"[startup] Buscando archivo de reset en: {reset_file}")
             if reset_file.exists():
                 try:
                     target_chat = reset_file.read_text().strip()
-                    print(f"[startup] Detectado reinicio pendiente para chat: {target_chat}")
-                    reset_file.unlink() # Limpiar ya
-                    
-                    await application.bot.send_message(chat_id=target_chat, text="⏳ El servicio se ha reiniciado. Obteniendo datos de acceso...")
-                    
-                    # Intentar obtener el QR (reintentar varias veces mientras arranca la API)
-                    import json, qrcode, io, requests, time
-                    
-                    port = int(os.getenv("API_PORT", "8001"))
-                    recovery_param = ""
-                    recovery_file = Path("vault_internal/.recovery_token")
-                    if recovery_file.exists():
-                        recovery_param = f"?recovery={recovery_file.read_text().strip()}"
-                    
-                    api_url = f"http://localhost:{port}/api/auth/request{recovery_param}"
-                    print(f"[startup] Intentando conectar con API: {api_url}")
-                    
-                    data = None
-                    for i in range(15): # Aumentamos a 15 intentos (45 seg total)
-                        try:
-                            resp = requests.get(api_url, timeout=5)
-                            if resp.status_code == 200:
-                                data = resp.json()
-                                print("[startup] Datos de acceso obtenidos con éxito.")
-                                break
-                            elif resp.status_code == 403:
-                                print("[startup] API respondió 403 (ya vinculado).")
-                                await application.bot.send_message(chat_id=target_chat, text="⚠️ El sistema ha arrancado pero el dispositivo administrador ya está vinculado.")
-                                return
-                        except Exception as e:
-                            if i % 5 == 0: print(f"[startup] Esperando a la API... (intento {i})")
-                            await asyncio.sleep(3)
-                    
-                    if data:
-                        url = data['url']
-                        pin = data['pin']
-                        
-                        qr = qrcode.QRCode(version=1, box_size=10, border=1)
-                        qr.add_data(json.dumps({"url": url, "pin": pin}))
-                        qr.make(fit=True)
-                        img = qr.make_image(fill_color="black", back_color="white")
-                        
-                        img_byte_arr = io.BytesIO()
-                        img.save(img_byte_arr, format='PNG')
-                        img_byte_arr.seek(0)
-                        
-                        await application.bot.send_photo(
-                            chat_id=target_chat,
-                            photo=img_byte_arr,
-                            caption=(
-                                "✅ *ResetService Completado*\n\n"
-                                f"🔗 *URL:* `{url}`\n"
-                                f"🔢 *PIN:* `{pin}`\n\n"
-                                "Sistema listo y sincronizado."
-                            ),
-                            parse_mode="Markdown"
-                        )
-                    else:
-                        print("[startup] Timeout esperando a la API.")
-                        await application.bot.send_message(chat_id=target_chat, text="❌ Error: El sistema arrancó pero la API tardó demasiado en responder. Usa `/status` para verificar.")
-                        
+                    await self._notify_reset_complete(target_chat, application=application)
                 except Exception as e:
-                    print(f"[error] Reset startup logic: {e}")
+                    print(f"[error] Startup reset check: {e}")
 
             # 3. Alerta de almacenamiento reducido (si aplica)
             if self.reduced_mode:
