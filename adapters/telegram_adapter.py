@@ -1318,12 +1318,8 @@ class TelegramAdapter:
         return True
 
     def run(self) -> None:
-        app = Application.builder().token(self.token).build()
-        app.add_handler(MessageHandler(filters.ALL, self._handle_message))
-        app.add_handler(CallbackQueryHandler(self._on_callback_query))
-        print(f"[telegram] Bot arrancado (polling). ReducedMode={self.reduced_mode}")
-        
         async def send_startup_alerts(application: Application):
+            print("[startup] Ejecutando alertas de inicio...")
             # 1. Notificación estándar de arranque
             startup_msg = "🤖 *Vault Bot está en línea*"
             if not self.commands_enabled:
@@ -1332,13 +1328,16 @@ class TelegramAdapter:
             for admin_id in self.allowed_chat_ids:
                 try: 
                     await application.bot.send_message(chat_id=admin_id, text=startup_msg, parse_mode="Markdown")
-                except: pass
+                except Exception as e:
+                    print(f"[startup] Error enviando saludo a {admin_id}: {e}")
 
             # 2. Verificar si venimos de un /resetservice
             reset_file = self.base_dir / "state" / ".reset_pending"
+            print(f"[startup] Buscando archivo de reset en: {reset_file}")
             if reset_file.exists():
                 try:
                     target_chat = reset_file.read_text().strip()
+                    print(f"[startup] Detectado reinicio pendiente para chat: {target_chat}")
                     reset_file.unlink() # Limpiar ya
                     
                     await application.bot.send_message(chat_id=target_chat, text="⏳ El servicio se ha reiniciado. Obteniendo datos de acceso...")
@@ -1353,18 +1352,22 @@ class TelegramAdapter:
                         recovery_param = f"?recovery={recovery_file.read_text().strip()}"
                     
                     api_url = f"http://localhost:{port}/api/auth/request{recovery_param}"
+                    print(f"[startup] Intentando conectar con API: {api_url}")
                     
                     data = None
-                    for _ in range(10): # 10 intentos
+                    for i in range(15): # Aumentamos a 15 intentos (45 seg total)
                         try:
                             resp = requests.get(api_url, timeout=5)
                             if resp.status_code == 200:
                                 data = resp.json()
+                                print("[startup] Datos de acceso obtenidos con éxito.")
                                 break
                             elif resp.status_code == 403:
+                                print("[startup] API respondió 403 (ya vinculado).")
                                 await application.bot.send_message(chat_id=target_chat, text="⚠️ El sistema ha arrancado pero el dispositivo administrador ya está vinculado.")
                                 return
-                        except:
+                        except Exception as e:
+                            if i % 5 == 0: print(f"[startup] Esperando a la API... (intento {i})")
                             await asyncio.sleep(3)
                     
                     if data:
@@ -1392,7 +1395,8 @@ class TelegramAdapter:
                             parse_mode="Markdown"
                         )
                     else:
-                        await application.bot.send_message(chat_id=target_chat, text="❌ Error: El sistema arrancó pero no se pudo obtener el nuevo código de emparejamiento.")
+                        print("[startup] Timeout esperando a la API.")
+                        await application.bot.send_message(chat_id=target_chat, text="❌ Error: El sistema arrancó pero la API tardó demasiado en responder. Usa `/status` para verificar.")
                         
                 except Exception as e:
                     print(f"[error] Reset startup logic: {e}")
@@ -1403,7 +1407,13 @@ class TelegramAdapter:
                 for admin_id in self.allowed_chat_ids:
                     try: await application.bot.send_message(chat_id=admin_id, text=alert, parse_mode="Markdown")
                     except: pass
+
+        # Construir aplicación con post_init integrado
+        app = Application.builder().token(self.token).post_init(send_startup_alerts).build()
         
-        app.post_init = send_startup_alerts
+        app.add_handler(MessageHandler(filters.ALL, self._handle_message))
+        app.add_handler(CallbackQueryHandler(self._on_callback_query))
+        
+        print(f"[telegram] Bot arrancado (polling). ReducedMode={self.reduced_mode}")
         app.run_polling(close_loop=False, stop_signals=None)
 
