@@ -253,3 +253,26 @@ class ChatStateStore:
         if changed:
             self._save()
         return changed
+
+    # ---- Global Settings ----
+    def get_global_setting(self, key: str, default: Any = None) -> Any:
+        """Retrieves a setting not tied to a specific chat."""
+        if "_global" not in self._state:
+            return default
+        return self._state["_global"].get(key, default)
+
+    def set_global_setting(self, key: str, value: Any) -> None:
+        """Persists a setting not tied to a specific chat."""
+        if "_global" not in self._state:
+            self._state["_global"] = {}
+        self._state["_global"][key] = value
+        self._save()
+
+    # ---- Maintenance Mode ----
+    def get_maintenance_mode(self) -> bool:
+        """Checks if maintenance mode (command blocking) is active."""
+        return self.get_global_setting("maintenance_mode", False)
+
+    def set_maintenance_mode(self, enabled: bool) -> None:
+        """Toggles maintenance mode."""
+        self.set_global_setting("maintenance_mode", bool(enabled))

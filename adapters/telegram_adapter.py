@@ -55,7 +55,8 @@ class TelegramAdapter:
         self.bot = Bot(token)
         self.reduced_mode = reduced_mode
         self.reduced_mode_error = reduced_mode_error
-        self.commands_enabled = True # New flag to disable commands for testing
+        # Load maintenance state from persistent store
+        self.commands_enabled = not self.state_store.get_maintenance_mode()
 
     def _is_allowed(self, update: Update) -> bool:
         if not self.allowed_chat_ids:
@@ -837,13 +838,18 @@ class TelegramAdapter:
         is_admin = self._is_admin(update)
         allowed_folders = set(self.state_store.get_allowed_folders(chat_id))
 
-        # Command blocking for testing
-        if not self.commands_enabled and command not in ["/help", "/resetservice", "/join"]:
+        # Command blocking for maintenance
+        is_maintenance_cmd = command in ["/maintenance"]
+        if not self.commands_enabled and command not in ["/help", "/resetservice", "/join"] and not is_maintenance_cmd:
              await msg.reply_text("⚠️ Los comandos están desactivados temporalmente por mantenimiento (fase de pruebas).")
              return True
 
         if command == "/resetservice":
             return await self._cmd_resetservice(msg, is_admin)
+        elif command == "/maintenance":
+            return await self._cmd_maintenance(msg, args, is_admin)
+        elif command in ["/startapi", "/stopapi", "/restartapi"]:
+            return await self._cmd_manage_api(msg, command, is_admin)
         elif command == "/invite":
             return await self._cmd_invite(msg, args, is_admin)
         elif command == "/access":
@@ -905,16 +911,84 @@ class TelegramAdapter:
         total, used, free = shutil.disk_usage(self.base_dir)
         pct = (used / total) * 100
 
+        # Estado de la API (Servicio independiente)
+        api_status = self._get_service_status("vault_api")
+
         text = (
             "📊 *Estado del Sistema*\n\n"
             f"📁 *Carpeta activa:* `{ctx}`\n"
             f"💎 *Originales:* `{'ON' if require_orig else 'OFF'}`\n"
-            f"📂 *Ruta base:* `{self.base_dir}`\n\n"
+            f"🛠️ *Mantenimiento:* `{'SÍ' if not self.commands_enabled else 'NO'}`\n"
+            f"🚀 *API Storage:* {api_status}\n\n"
             f"💾 *Disco:* {pct:.1f}% ocupado\n"
             f"└ Total: {total / (1024**3):.1f} GB\n"
-            f"└ Libre: {free / (1024**3):.1f} GB"
+            f"└ Libre: {free / (1024**3):.1f} GB\n"
+            f"└ Ruta: `{self.base_dir}`"
         )
         await msg.reply_text(text, parse_mode="Markdown")
+        return True
+
+    def _get_service_status(self, service_name: str) -> str:
+        if os.name != "posix":
+            return "N/A (Windows)"
+        try:
+            import subprocess
+            res = subprocess.run(["systemctl", "is-active", service_name], capture_output=True, text=True, timeout=2)
+            status = res.stdout.strip()
+            if status == "active": return "✅ Online"
+            if status == "inactive": return "⚪ Offline"
+            if status == "failed": return "🔴 Error"
+            return f"❓ {status}"
+        except Exception:
+            return "❔ Desconocido"
+
+    async def _cmd_maintenance(self, msg, args: str, is_admin: bool) -> bool:
+        if not is_admin:
+            await msg.reply_text("⛔ Solo administradores.")
+            return True
+        
+        if not args:
+            await msg.reply_text(f"🛠️ Mantenimiento: {'SÍ (Comandos bloqueados)' if not self.commands_enabled else 'NO'}\nUso: /maintenance <on|off>")
+            return True
+        
+        arg = args.lower()
+        if arg in ("on", "si", "sí", "true"):
+            self.commands_enabled = False
+            self.state_store.set_maintenance_mode(True)
+            await msg.reply_text("🛠️ Mantenimiento ACTIVADO. Los comandos de usuario han sido bloqueados.")
+            return True
+        elif arg in ("off", "no", "false"):
+            self.commands_enabled = True
+            self.state_store.set_maintenance_mode(False)
+            await msg.reply_text("✅ Mantenimiento DESACTIVADO. Todos los comandos están disponibles.")
+            return True
+        
+        await msg.reply_text("Uso: /maintenance on | off")
+        return True
+
+    async def _cmd_manage_api(self, msg, command: str, is_admin: bool) -> bool:
+        if not is_admin:
+            await msg.reply_text("⛔ Solo administradores.")
+            return True
+
+        import subprocess
+        action = command.replace("/api", "").replace("/", "") # start, stop, restart
+        if action == "startapi": action = "start"
+        elif action == "stopapi": action = "stop"
+        elif action == "restartapi": action = "restart"
+
+        await msg.reply_text(f"⏳ Ejecutando `{action}` en el servicio `vault_api`...")
+        
+        try:
+            # Intentamos ejecutar systemctl
+            res = subprocess.run(["sudo", "systemctl", action, "vault_api"], capture_output=True, text=True, timeout=10)
+            if res.returncode == 0:
+                await msg.reply_text(f"✅ Operación `{action}` completada con éxito.")
+            else:
+                await msg.reply_text(f"❌ Error al gestionar el servicio:\n`{res.stderr.strip()}`", parse_mode="Markdown")
+        except Exception as e:
+            await msg.reply_text(f"❌ Fallo crítico al ejecutar comando: {e}")
+        
         return True
 
     async def _cmd_formats(self, msg, args: str, is_admin: bool) -> bool:

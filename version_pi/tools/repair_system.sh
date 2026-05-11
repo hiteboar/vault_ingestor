@@ -45,18 +45,20 @@ echo "[4/5] Repairing Auto-Start Service (Systemd) for resilience..."
 # Using Restart=always to ensure automatic recovery after crashes
 
 USER_NAME=$USER
-SERVICE_FILE="/tmp/vault_ingestor.service"
+API_SERVICE_FILE="/tmp/vault_api.service"
+BOT_SERVICE_FILE="/tmp/vault_bot.service"
 
-cat <<EOF > "$SERVICE_FILE"
+echo "[*] Creating Vault API Service..."
+cat <<EOF > "$API_SERVICE_FILE"
 [Unit]
-Description=Vault Ingestor API Supervisor
+Description=Vault Ingestor API Service
 After=network.target network-online.target
 Wants=network-online.target
 
 [Service]
 User=$USER_NAME
 WorkingDirectory=$PROJECT_DIR
-ExecStart=$PROJECT_DIR/.venv/bin/python $PROJECT_DIR/version_pi/autorun_pi.py
+ExecStart=$PROJECT_DIR/.venv/bin/python $PROJECT_DIR/app.py --mode api
 Restart=always
 RestartSec=10
 
@@ -64,18 +66,44 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
 
-sudo mv "$SERVICE_FILE" /etc/systemd/system/vault_ingestor.service
+echo "[*] Creating Vault Bot Service..."
+cat <<EOF > "$BOT_SERVICE_FILE"
+[Unit]
+Description=Vault Ingestor Bot Service
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+User=$USER_NAME
+WorkingDirectory=$PROJECT_DIR
+ExecStart=$PROJECT_DIR/.venv/bin/python $PROJECT_DIR/app.py --mode bot
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Clean up old combined service if it exists
+sudo systemctl stop vault_ingestor 2>/dev/null
+sudo systemctl disable vault_ingestor 2>/dev/null
+sudo rm -f /etc/systemd/system/vault_ingestor.service
+
+# Install new services
+sudo mv "$API_SERVICE_FILE" /etc/systemd/system/vault_api.service
+sudo mv "$BOT_SERVICE_FILE" /etc/systemd/system/vault_bot.service
 sudo systemctl daemon-reload
-sudo systemctl enable vault_ingestor
+sudo systemctl enable vault_api vault_bot
 
 echo ""
 echo "=== Repair Completed! ==="
 echo "1. Vital dependencies and files have been restored."
 echo "2. Systemd has been configured to auto-recover the application (Restart=always)."
 echo ""
-echo "[5/5] Proceeding to RESTART the service in the background..."
+echo "[5/5] Proceeding to RESTART services in the background..."
 echo "      (This operation may take a few seconds, please wait...)"
-sudo systemctl restart vault_ingestor
+sudo systemctl restart vault_api
+sudo systemctl restart vault_bot
 
 echo ""
 echo "[✔] Service restarted successfully."
