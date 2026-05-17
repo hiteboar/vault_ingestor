@@ -124,9 +124,17 @@ fi
 # 5. Base System Dependencies Installation
 echo -e "\n${BLUE}[*] Instalando/Actualizando dependencias base del sistema...${NC}"
 sudo apt-get update
+
+# Detect active Python 3 version to install the correct development headers (e.g. python3.13-dev)
+PYTHON_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "")
+if [ -n "$PYTHON_VER" ]; then
+    echo -e "[*] Detectada versión de Python: ${GREEN}$PYTHON_VER${NC}. Instalando cabeceras de desarrollo específicas..."
+    sudo apt-get install -y python${PYTHON_VER}-dev 2>/dev/null || echo -e "${YELLOW}[!] Advertencia: No se pudo instalar python${PYTHON_VER}-dev. Intentando continuar...${NC}"
+fi
+
 # Robust installation for Bullseye & Bookworm OS versions
-sudo apt-get install -y libopenjp2-7 libtiff5 libtiff6 libjpeg-dev zlib1g-dev python3-venv rustc cargo libffi-dev libssl-dev ffmpeg curl 2>/dev/null || \
-sudo apt-get install -y libopenjp2-7 libjpeg-dev zlib1g-dev python3-venv rustc cargo libffi-dev libssl-dev ffmpeg curl
+sudo apt-get install -y libopenjp2-7 libtiff5 libtiff6 libjpeg-dev zlib1g-dev python3-dev python3-venv rustc cargo libffi-dev libssl-dev ffmpeg curl 2>/dev/null || \
+sudo apt-get install -y libopenjp2-7 libjpeg-dev zlib1g-dev python3-dev python3-venv rustc cargo libffi-dev libssl-dev ffmpeg curl
 
 # 6. Official Cloudflared Binary Installation (32/64-bit aware)
 if ! command -v cloudflared &> /dev/null; then
