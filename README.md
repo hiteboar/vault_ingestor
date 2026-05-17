@@ -43,13 +43,19 @@ Para usar un disco duro externo como unidad principal de almacenamiento, sigue e
     ```
 5.  **Configura Vault:** Asegúrate de que en tu archivo `.env` la variable `STORAGE_DIR` apunte a `/mnt/vault_storage`.
 
-### 3. Configuración de Arranque Automático
-Para garantizar que el sistema se inicie solo cada vez que enciendas la Raspberry Pi, ejecuta el script de reparación que configura el servicio de sistema (`systemd`):
+### 3. Configuración de Arranque Automático y Mantenimiento
+El script de instalación unificado también se encarga de configurar los demonios de servicio (`systemd`) y asegurar la resiliencia del sistema. 
 
+Si es la primera vez que instalas, esto se realiza automáticamente al ejecutar el instalador:
 ```bash
-bash version_pi/tools/repair_system.sh
+bash install_vault.sh
 ```
-*Este comando crea un servicio llamado `vault_ingestor.service` que se encarga de vigilar el sistema y reiniciarlo automáticamente si detecta algún fallo.*
+
+Si en el futuro necesitas actualizar dependencias, solucionar problemas o reinstalar los servicios de auto-arranque, simplemente vuelve a ejecutar el mismo script. Este detectará tu configuración actual y te dará la opción de reparar el sistema manteniendo intactos tus datos:
+```bash
+bash install_vault.sh
+```
+*Este comando crea e instala los servicios `vault_api.service` y `vault_bot.service` que se encargan de vigilar el backend y el controlador bot, reiniciándolos automáticamente si detectan algún fallo de red o de sistema.*
 
 ---
 

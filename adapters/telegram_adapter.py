@@ -1291,31 +1291,6 @@ class TelegramAdapter:
             await msg.reply_text(f"❌ Error guardando: {e}")
             print(f"[error] {e}")
 
-    async def _cmd_resetservice(self, msg, is_admin: bool) -> bool:
-        if not is_admin:
-            await msg.reply_text("⛔ Solo administradores pueden reiniciar el servicio.")
-            return True
-            
-        chat_id = str(msg.chat_id)
-        # 1. Guardar estado para después del reinicio
-        try:
-            reset_file = self.base_dir / "state" / ".reset_pending"
-            reset_file.write_text(chat_id, encoding="utf-8")
-        except Exception as e:
-            await msg.reply_text(f"❌ Error al preparar el reinicio: {e}")
-            return True
-
-        await msg.reply_text("🔄 Ejecutando `run_vault.sh`...\nEl sistema se reiniciará. Te enviaré el acceso en cuanto vuelva a estar en línea.", parse_mode="Markdown")
-        
-        try:
-            import subprocess
-            # Ejecutar el script y dejar que el sistema nos reinicie
-            subprocess.Popen(["bash", "run_vault.sh"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        except Exception as e:
-            await msg.reply_text(f"❌ Error al lanzar el script: {e}")
-            if reset_file.exists(): reset_file.unlink()
-            
-        return True
 
     async def _notify_reset_complete(self, target_chat: str, application: Optional[Application] = None):
         """Espera a que la API esté lista y envía el QR al usuario."""
@@ -1404,14 +1379,14 @@ class TelegramAdapter:
             await msg.reply_text(f"❌ Error al preparar el reinicio: {e}")
             return True
 
-        await msg.reply_text("🔄 Reiniciando API de almacenamiento...", parse_mode="Markdown")
+        await msg.reply_text("🔄 Reiniciando API de almacenamiento y actualizando conexión...\nEspera unos segundos.", parse_mode="Markdown")
         
         try:
             import subprocess
-            # Ejecutar el script (esto reinicia la API pero NO el bot)
+            # Ejecutar el script de arranque (esto reinicia la API)
             subprocess.Popen(["bash", "run_vault.sh"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             
-            # Lanzar tarea de espera en segundo plano (para que funcione sin reiniciar el bot)
+            # Lanzar tarea de espera en segundo plano para notificar al terminar
             asyncio.create_task(self._notify_reset_complete(chat_id))
             
         except Exception as e:

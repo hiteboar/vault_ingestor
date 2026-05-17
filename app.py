@@ -64,17 +64,34 @@ def bootstrap():
 
     # 2. Check critical dependencies
     if not getattr(sys, 'frozen', False):
+        if os.getenv("VAULT_NO_AUTOINSTALL", "false").lower() == "true":
+            return
+
         try:
             import fastapi
             import pycloudflared
             import telegram
         except ImportError:
-            print("[*] Installing necessary dependencies...")
+            # Prevent multiple processes from installing at the same time
+            lock_file = project_dir / ".pip_install.lock"
+            if lock_file.exists():
+                print("[*] Another process is installing dependencies. Waiting...")
+                for _ in range(30):
+                    time.sleep(2)
+                    if not lock_file.exists():
+                        return
+                print("[!] Timeout waiting for other installation. Proceeding with caution.")
+
             try:
+                lock_file.touch()
+                print("[*] Installing necessary dependencies...")
                 subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
                 print("[✔] Installation completed.")
             except Exception as e:
                 print(f"[!] Error installing dependencies: {e}")
+            finally:
+                if lock_file.exists():
+                    lock_file.unlink()
 
 def run_telegram_bot(storage_dir, meta_log, reduced_mode=False, reduced_mode_error=None):
     """Initializes and runs the Telegram Bot in a separate thread."""
