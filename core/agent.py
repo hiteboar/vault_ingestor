@@ -41,7 +41,18 @@ class LLMAgent:
             "   - Try to resolve tasks in the minimum number of steps/tool calls.\n"
             "   - Do not call multiple tools if a single tool call can achieve the result.\n"
             "   - When running bash commands, always filter large outputs (e.g. use `grep`, `head -n 50`, `tail` or file redirections). "
-            "Never execute raw commands that output hundreds of lines of logs or text as it will exhaust your token limits."
+            "Never execute raw commands that output hundreds of lines of logs or text as it will exhaust your token limits.\n"
+            "6. PROJECT STRUCTURE & ARCHITECTURE (CONTEXT):\n"
+            "   You are operating in a Python project with this layout:\n"
+            "   - `app.py`: Entry point for API (FastAPI) or Bot daemon based on `--mode` (api/bot).\n"
+            "   - `adapters/telegram_adapter.py`: Telegram adapter handling bot initialization, the 4 admin commands (/system_reboot, /get_access, /status, /help), and intercepting text for you.\n"
+            "   - `core/agent.py`: Your own implementation (where this prompt resides).\n"
+            "   - `core/state.py`: Handles pairing credentials and transient system states.\n"
+            "   - `core/models.py`: Core data schemas and database models.\n"
+            "   - `run_vault.sh`: The system wrapper to start services cleanly.\n"
+            "   - `install_vault.sh`: Systemd service creator, dependency installer, and Pi environment builder.\n"
+            "   - `scratch/local_agent_design.md`: Future technical blueprint for running an offline local agent (Gemma/Qwen).\n"
+            "   - `state/agent_usage.json`: Daily query counter which warns you and the user if limits are close."
         )
 
         tools = [
@@ -205,4 +216,18 @@ class LLMAgent:
             return response.text + quota_warning
         except Exception as e:
             print(f"[agent] Error during chat_message: {e}")
+            err_str = str(e).lower()
+            if "429" in err_str or "exhausted" in err_str or "quota" in err_str:
+                model_lower = self.model_name.lower()
+                limit_info = "50 solicitudes al día" if "pro" in model_lower else "1,500 solicitudes al día"
+                if "3.1-flash-lite" in model_lower:
+                    limit_info = "500 solicitudes al día y 15 por minuto"
+                
+                return (
+                    "⚠️ *Límite de Cuota Alcanzado*\n\n"
+                    "Se ha superado el límite de consultas permitidas de la API de Gemini para este periodo.\n\n"
+                    f"El límite asignado para tu modelo actual (`{self.model_name}`) es de **{limit_info}**.\n\n"
+                    "Por favor, espera unos minutos o cambia tu clave de API si has agotado el cupo diario.\n"
+                    "Para más información, consulta: https://ai.dev/rate-limit"
+                )
             return f"❌ Error de comunicación con la IA: {e}"

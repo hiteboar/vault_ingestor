@@ -303,10 +303,28 @@ class TelegramAdapter:
                     # Fallback to plain text if Markdown parsing fails (e.g., due to unescaped underscores/special chars)
                     await processing_msg.edit_text(response)
             except Exception as e:
+                err_str = str(e).lower()
+                if "429" in err_str or "exhausted" in err_str or "quota" in err_str:
+                    model_name = self.agent.model_name
+                    model_lower = model_name.lower()
+                    limit_info = "50 solicitudes al día" if "pro" in model_lower else "1,500 solicitudes al día"
+                    if "3.1-flash-lite" in model_lower:
+                        limit_info = "500 solicitudes al día y 15 por minuto"
+                    
+                    user_msg = (
+                        "⚠️ *Límite de Cuota Alcanzado*\n\n"
+                        "Se ha superado el límite de consultas permitidas de la API de Gemini para este periodo.\n\n"
+                        f"El límite asignado para tu modelo actual (`{model_name}`) es de **{limit_info}**.\n\n"
+                        "Por favor, espera unos minutos o cambia tu clave de API si has agotado el cupo diario.\n"
+                        "Para más información, consulta: https://ai.dev/rate-limit"
+                    )
+                else:
+                    user_msg = f"❌ Error del Agente: {e}"
+                
                 try:
-                    await processing_msg.edit_text(f"❌ Error del Agente: {e}", parse_mode="Markdown")
+                    await processing_msg.edit_text(user_msg, parse_mode="Markdown")
                 except Exception:
-                    await processing_msg.edit_text(f"❌ Error del Agente: {e}")
+                    await processing_msg.edit_text(user_msg)
             return
 
         # 3. Procesamiento de archivos
