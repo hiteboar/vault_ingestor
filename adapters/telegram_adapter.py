@@ -297,9 +297,16 @@ class TelegramAdapter:
             processing_msg = await msg.reply_text("🧠 *Agente analizando...*", parse_mode="Markdown")
             try:
                 response = await self.agent.chat_message(text)
-                await processing_msg.edit_text(response, parse_mode="Markdown")
+                try:
+                    await processing_msg.edit_text(response, parse_mode="Markdown")
+                except Exception:
+                    # Fallback to plain text if Markdown parsing fails (e.g., due to unescaped underscores/special chars)
+                    await processing_msg.edit_text(response)
             except Exception as e:
-                await processing_msg.edit_text(f"❌ Error del Agente: {e}", parse_mode="Markdown")
+                try:
+                    await processing_msg.edit_text(f"❌ Error del Agente: {e}", parse_mode="Markdown")
+                except Exception:
+                    await processing_msg.edit_text(f"❌ Error del Agente: {e}")
             return
 
         # 3. Procesamiento de archivos
