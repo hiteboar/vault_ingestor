@@ -3,24 +3,23 @@ import os
 import asyncio
 from datetime import datetime, timezone
 from typing import Iterator, Optional, Set, List
-import re
-import random
-
-from telegram import Update, InputMediaPhoto, InlineKeyboardButton, InlineKeyboardMarkup, Bot
-from telegram.ext import Application, MessageHandler, CallbackQueryHandler, ContextTypes, filters
-
 import shutil
-import tempfile
-import uuid
-from pathlib import Path
+import subprocess
 import requests
+import json
+import io
+import qrcode
+from pathlib import Path
+
+from telegram import Update, Bot
+from telegram.ext import Application, MessageHandler, ContextTypes, filters
 
 from core.models import IncomingMedia
 from core.pipeline import process_one
 from core.state import ChatStateStore
-from core.storage import sanitize_context, atomic_write, ext_from_content_type, CONTENT_TYPE_EXT
+from core.storage import sanitize_context
 from core.dedup import HashIndex
-from core.env_manager import add_allowed_chat_id, remove_allowed_chat_id
+from core.agent import LLMAgent
 
 class TelegramAdapter:
     def __init__(
@@ -55,8 +54,9 @@ class TelegramAdapter:
         self.bot = Bot(token)
         self.reduced_mode = reduced_mode
         self.reduced_mode_error = reduced_mode_error
-        # Load maintenance state from persistent store
-        self.commands_enabled = not self.state_store.get_maintenance_mode()
+        
+        # Iniciar agente IA
+        self.agent = LLMAgent()
 
     def _is_allowed(self, update: Update) -> bool:
         if not self.allowed_chat_ids:
@@ -64,760 +64,10 @@ class TelegramAdapter:
         chat = update.effective_chat
         if not chat:
             return False
-            
-        # 1. Admin ID en .env
-        if chat.id in self.allowed_chat_ids:
-            return True
-            
-        # 2. Tiene acceso activo en el estado
-        if self.state_store.is_user_allowed(str(chat.id)):
-            return True
-            
-        # 3. Intento de unirse (necesita el código después)
-        msg = update.effective_message
-        if msg and msg.text and msg.text.strip().lower().startswith("/join"):
-            return True
-            
-        return False
-    def _list_named_contexts(self) -> list[str]:
-        contexts = set()
-        try:
-            if not self.upload_dir.exists():
-                return []
-            for p in self.upload_dir.iterdir():
-                if not p.is_dir():
-                    continue
-                name = p.name
-                # Ocultar carpetas ocultas (.)
-                if name.startswith("."):
-                    continue
-                
-                # Ocultar carpetas que son solo números (buckets por fecha en root)
-                if re.match(r"^\d{4}$", name):
-                    continue
-                
-                ctx = sanitize_context(name)
-                if ctx and ctx != "root":
-                    contexts.add(ctx)
-        except Exception:
-            pass
-        return sorted(contexts)
-
-    def _fmt_original_status(self, require_original: bool) -> str:
-        return "ON (solo Documento/Archivo, sin compresión)" if require_original else "OFF (permite Foto, puede comprimirse)"
+        return chat.id in self.allowed_chat_ids
 
     def _is_admin(self, update: Update) -> bool:
-        if self.allowed_chat_ids is None:
-            return True
-        user_id = update.effective_user.id
-        return user_id in self.allowed_chat_ids
-
-    async def _cmd_invite(self, msg, args: str, is_admin: bool) -> bool:
-        if not is_admin:
-            await msg.reply_text("⛔ Solo administradores pueden crear invitaciones.")
-            return True
-        if not args:
-            await msg.reply_text("Uso: /invite <carpeta> [etiqueta]\nEj: /invite boda_pepito Pepito")
-            return True
-            
-        parts = args.split(maxsplit=1)
-        folder = sanitize_context(parts[0])
-        tag = parts[1] if len(parts) > 1 else f"invitado_{datetime.now(timezone.utc).strftime('%H%M%S')}"
-        
-        code = self.state_store.create_invite(folder, tag)
-        await msg.reply_text(
-            f"🎟️ Invitación creada para la carpeta '{folder}'.\n"
-            f"🏷️ Etiqueta: {tag}\n"
-            f"⏳ Válida por: 24 horas\n"
-            f"El invitado debe usar:\n\n/join {code}"
-        )
-        return True
-
-    async def _cmd_join(self, msg, chat_id: str, args: str) -> bool:
-        code = args.strip()
-        if not code:
-            await msg.reply_text("Uso: /join <codigo_invitacion>")
-            return True
-
-        # Validamos código pero NO lo reclamamos todavía
-        invites = self.state_store._state.get("_invites", {})
-        if code not in invites:
-            await msg.reply_text("❌ Código no válido o caducado.")
-            return True
-
-        info = invites[code]
-        folder = info["folder"] if isinstance(info, dict) else info
-
-        user = msg.from_user
-        username = f"@{user.username}" if user.username else user.full_name
-        
-        # Guardar solicitud pendiente en el estado para poder usarla en CallbackQuery
-        self.state_store.set_pending_action(chat_id, {
-            "action": "wait_approval",
-            "code": code,
-            "folder": folder
-        })
-
-        # Avisar a los admins
-        admin_text = (
-            "🔔 *Solicitud de Acceso*\n\n"
-            f"👤 *Usuario:* {username} (ID: `{chat_id}`)\n"
-            f"📁 *Carpeta:* `{folder}`\n"
-            f"🔑 *Código usado:* `{code}`\n\n"
-            "¿Permitir el acceso a este usuario?"
-        )
-        
-        keyboard = [
-            [
-                InlineKeyboardButton("✅ Aceptar", callback_data=f"appr_acc_{chat_id}"),
-                InlineKeyboardButton("❌ Rechazar", callback_data=f"appr_rej_{chat_id}")
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        for admin_id in self.allowed_chat_ids:
-            try:
-                await self.bot.send_message(
-                    chat_id=admin_id,
-                    text=admin_text,
-                    parse_mode="Markdown",
-                    reply_markup=reply_markup
-                )
-            except Exception as e:
-                print(f"[error] No se pudo notificar al admin {admin_id}: {e}")
-
-        await msg.reply_text("⏳ Tu solicitud ha sido enviada a los administradores. Te avisaré cuando la revisen.")
-        return True
-
-    async def _on_callback_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        if not query or not query.data:
-            return
-        
-        # Verificar que quien pulsa es admin
-        if query.from_user.id not in self.allowed_chat_ids:
-            await query.answer("⛔ No tienes permisos.")
-            return
-
-        data = query.data
-        if not data.startswith("appr_"):
-            return
-
-        # appr_acc_12345 o appr_rej_12345
-        parts = data.split("_")
-        action = parts[1] # acc / rej
-        user_id = parts[2]
-
-        pending = self.state_store.get_pending_action(user_id)
-        if not pending or pending.get("action") != "wait_approval":
-            await query.answer("⚠️ Solicitud caducada o ya procesada.")
-            await query.edit_message_text("Esta solicitud ya no es válida.")
-            return
-
-        code = pending["code"]
-        folder = pending["folder"]
-
-        if action == "acc":
-            # 1. Reclama invitación
-            claimed_folder = self.state_store.claim_invite(user_id, code)
-            
-            # 2. Añadir a .env y memoria
-            add_allowed_chat_id(self.env_path, user_id)
-            self.allowed_chat_ids.add(int(user_id))
-
-            # 3. Limpiar estado
-            self.state_store.clear_pending_action(user_id)
-
-            await query.answer("✅ Usuario aprobado.")
-            await query.edit_message_text(f"✅ Has aprobado el acceso de `{user_id}` a la carpeta `{folder}`.", parse_mode="Markdown")
-            
-            # Notificar al usuario
-            try:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=f"🎉 ¡Acceso aprobado! Ahora puedes usar el bot.\n📁 Carpeta asignada: *{folder}*",
-                    parse_mode="Markdown"
-                )
-            except Exception:
-                pass
-
-        elif action == "rej":
-            self.state_store.clear_pending_action(user_id)
-            await query.answer("❌ Usuario rechazado.")
-            await query.edit_message_text(f"❌ Has rechazado el acceso de `{user_id}`.", parse_mode="Markdown")
-            
-            # Notificar al usuario
-            try:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text="❌ Tu solicitud de acceso ha sido rechazada por el administrador."
-                )
-            except Exception:
-                pass
-
-    async def _cmd_setfolder(self, msg, chat_id: str, args: str, is_admin: bool, allowed_folders: set) -> bool:
-        if not args:
-            await msg.reply_text("Uso: /setfolder nombre_carpeta\nEj: /setfolder viaje_roma")
-            return True
-        ctx = sanitize_context(args)
-        
-        if not is_admin and ctx not in allowed_folders:
-            return True
-            
-        target_dir = self.upload_dir / ctx
-        
-        if target_dir.exists() and target_dir.is_dir() and ctx != self.state_store.get_context(chat_id, self.default_context):
-            self.state_store.set_pending_action(chat_id, {"action": "confirm_setfolder", "folder": ctx})
-            await msg.reply_text(f"⚠️ La carpeta '{ctx}' ya existe.\n¿Quieres moverte a la carpeta ya existente? (si/no)")
-            return True
-
-        self.state_store.set_context(chat_id, ctx)
-        self.state_store.clear_pending_action(chat_id)
-        await msg.reply_text(f"📁 Carpeta activa: {ctx}")
-        return True
-
-    async def _cmd_clearfolder(self, msg, chat_id: str, is_admin: bool) -> bool:
-        if not is_admin:
-            await msg.reply_text("⛔ Solo administradores pueden resetear la carpeta a default.")
-            return True
-        self.state_store.clear_context(chat_id)
-        await msg.reply_text(f"📁 Carpeta activa: {self.default_context}")
-        return True
-
-    async def _cmd_folders(self, msg, is_admin: bool, allowed_folders: set) -> bool:
-        if not is_admin:
-            lines = "\n".join(f"- {f}" for f in sorted(allowed_folders))
-            if not lines:
-                lines = "(ninguna)"
-            await msg.reply_text(f"📂 Carpetas permitidas ({len(allowed_folders)}):\n{lines}")
-            return True
-            
-        contexts = self._list_named_contexts()
-        if not contexts:
-            await msg.reply_text("📂 No hay carpetas con nombre todavía.")
-            return True
-        lines = "\n".join(f"- {c}" for c in contexts)
-        await msg.reply_text(f"📂 Carpetas con nombre ({len(contexts)}):\n{lines}")
-        return True
-
-    async def _cmd_folder(self, msg, chat_id: str) -> bool:
-        ctx = self.state_store.get_context(chat_id, self.default_context)
-        await msg.reply_text(f"📁 Carpeta activa: {ctx}")
-        return True
-
-    async def _cmd_original(self, msg, chat_id: str, args: str, is_admin: bool) -> bool:
-        if not is_admin:
-            await msg.reply_text("⛔ Solo administradores pueden cambiar la calidad de subida.")
-            return True
-            
-        if not args:
-            current = self.state_store.get_require_original(chat_id, self.require_original_default)
-            await msg.reply_text(f"📷 Original: {self._fmt_original_status(current)}")
-            return True
-
-        arg = args.lower()
-        if arg in ("on", "true", "1", "yes", "si", "sí"):
-            self.state_store.set_require_original(chat_id, True)
-            await msg.reply_text("📷 Original: ON ✅\nA partir de ahora, envía imágenes como *Archivo/Documento*.")
-            return True
-        if arg in ("off", "false", "0", "no"):
-            self.state_store.set_require_original(chat_id, False)
-            await msg.reply_text("📷 Original: OFF ✅\nSe permiten fotos normales (pueden venir comprimidas).")
-            return True
-
-        await msg.reply_text("Uso: /original on | /original off | /original")
-        return True
-
-    async def _cmd_downloadfolder(self, msg, chat_id: str, args: str, is_admin: bool, allowed_folders: set) -> bool:
-        current_ctx = self.state_store.get_context(chat_id, self.default_context)
-        folder_name = sanitize_context(args.split()[0]) if args else current_ctx
-        
-        if not is_admin and folder_name not in allowed_folders:
-            await msg.reply_text(f"⛔ No tienes permiso para acceder a la carpeta '{folder_name}'.")
-            return True
-        
-        if folder_name == "default":
-            await msg.reply_text("⚠️ Estás en la carpeta 'default'. Especifica una carpeta: /downloadfolder <carpeta>")
-            return True
-        
-        target_dir = self.upload_dir / folder_name
-        if folder_name == "root":
-             target_dir = self.upload_dir # Or specifically handle root
-        
-        if not target_dir.exists() or not target_dir.is_dir():
-            await msg.reply_text(f"❌ La carpeta '{folder_name}' no existe.")
-            return True
-        
-        await msg.reply_text(f"📦 Comprimiendo carpeta '{folder_name}'...")
-        
-        try:
-            tmp_dir = self.base_dir / "_tmp"
-            tmp_dir.mkdir(exist_ok=True)
-            
-            base_zip_name = f"{folder_name}_{uuid.uuid4().hex}"
-            base_zip_path = str(tmp_dir / base_zip_name)
-            
-            shutil.make_archive(base_zip_path, 'zip', target_dir)
-            
-            final_zip = Path(base_zip_path + ".zip")
-            
-            try:
-                await msg.reply_document(document=final_zip, filename=f"{folder_name}.zip")
-            except Exception as e:
-                await msg.reply_text(f"❌ Error al enviar el ZIP: {e}")
-            finally:
-                final_zip.unlink(missing_ok=True)
-                
-        except Exception as e:
-            await msg.reply_text(f"❌ Error al crear el ZIP: {e}")
-            print(f"[error] {e}")
-        
-        return True
-
-    async def _cmd_download(self, msg, args: str, is_admin: bool, allowed_folders: set) -> bool:
-        if not args:
-            await msg.reply_text("Uso: /download <nombre_archivo_o_ruta>")
-            return True
-        
-        target = args.strip()
-        found_path = None
-
-        # 1. Intentar como ruta directa (absoluta o relativa)
-        try:
-            p = Path(target)
-            # Si es absoluta, verificamos que esté dentro de base_dir
-            if p.is_absolute():
-                if p.is_file() and p.resolve().is_relative_to(self.base_dir.resolve()):
-                    found_path = p
-            else:
-                # Si es relativa, probamos desde base_dir
-                p_rel = (self.base_dir / p).resolve()
-                if p_rel.is_file() and p_rel.is_relative_to(self.base_dir.resolve()):
-                    found_path = p_rel
-        except Exception:
-            pass
-
-        # 2. Si no se encontró por ruta directa, usar rglob (búsqueda difusa)
-        if not found_path:
-            await msg.reply_text(f"🔍 Buscando '{target}'...")
-            try:
-                for p in self.upload_dir.rglob(target):
-                    if p.is_file():
-                        found_path = p
-                        break
-            except Exception as e:
-                print(f"[error] Error en rglob de download: {e}")
-
-        if not found_path or not found_path.exists():
-            await msg.reply_text("❌ Archivo no encontrado o no tienes acceso.")
-            return True
-        
-        # 3. Verificación de seguridad/permisos
-        if not is_admin:
-            try:
-                rel = found_path.resolve().relative_to(self.base_dir.resolve())
-                if not rel.parts or rel.parts[0] not in allowed_folders:
-                    await msg.reply_text("⛔ No tienes acceso a este archivo.")
-                    return True
-            except Exception:
-                await msg.reply_text("⛔ Error de permisos verificando el archivo.")
-                return True
-        
-        # 4. Envío del archivo
-        try:
-            await msg.reply_document(document=found_path, filename=found_path.name)
-        except Exception as e:
-            await msg.reply_text(f"❌ Error al enviar el archivo: {e}")
-            print(f"[error] {e}")
-        
-        return True
-
-    async def _cmd_delete(self, msg, chat_id: str, args: str, is_admin: bool, allowed_folders: set) -> bool:
-        if not args:
-            await msg.reply_text("Uso: /delete <nombre_archivo_o_carpeta>")
-            return True
-        
-        target_name = args
-        found_path = None
-        try:
-            for p in self.upload_dir.rglob(target_name):
-                if p.name == target_name:
-                    found_path = p
-                    break
-        except Exception as e:
-            print(f"[error] Error buscando objetivo: {e}")
-        
-        if not found_path:
-            await msg.reply_text("❌ Archivo o carpeta no encontrado.")
-            return True
-            
-        # Seguridad: Solo admin o si está dentro de allowed_folders
-        if not is_admin:
-            try:
-                rel = found_path.relative_to(self.base_dir)
-                if rel.parts[0] not in allowed_folders:
-                    await msg.reply_text("⛔ No tienes permiso para eliminar archivos fuera de tus carpetas.")
-                    return True
-            except Exception:
-                await msg.reply_text("⛔ Error de permisos.")
-                return True
-        
-        rel_path = found_path.relative_to(self.upload_dir).as_posix()
-        
-        self.state_store.set_pending_action(chat_id, {
-            "action": "confirm_delete",
-            "target": str(found_path)
-        })
-        
-        tipo = "carpeta" if found_path.is_dir() else "archivo"
-        await msg.reply_text(f"⚠️ ¿Estás seguro de que deseas eliminar este {tipo}: '{rel_path}'? (si/no)")
-        return True
-
-    async def _cmd_vaultadd(self, msg, chat_id: str, args: str, is_admin: bool) -> bool:
-        if not is_admin:
-            await msg.reply_text("⛔ El Baúl es solo para administradores.")
-            return True
-        if not args:
-            await msg.reply_text("Uso: /vaultadd <etiqueta>\nEj: /vaultadd pasaporte")
-            return True
-        
-        tag = sanitize_context(args)
-        self.state_store.set_pending_action(chat_id, {"action": "await_vault", "tag": tag})
-        await msg.reply_text(f"🔐 Modo Baúl activado.\nEnvía ahora el archivo que se guardará con la etiqueta: '{tag}'.")
-        return True
-
-    async def _cmd_vaultget(self, msg, args: str, is_admin: bool) -> bool:
-        if not is_admin:
-            await msg.reply_text("⛔ El Baúl es solo para administradores.")
-            return True
-        if not args:
-            await msg.reply_text("Uso: /vaultget <etiqueta>")
-            return True
-        
-        tag = sanitize_context(args)
-        vault_dir = self.base_dir / "_vault"
-        
-        if not vault_dir.exists() or not vault_dir.is_dir():
-            await msg.reply_text("❌ El baúl está vacío.")
-            return True
-            
-        found = None
-        for p in vault_dir.iterdir():
-            if p.is_file() and p.stem == tag:
-                found = p
-                break
-                
-        if not found:
-            await msg.reply_text(f"❌ No se encontró nada con la etiqueta '{tag}' en el baúl.")
-            return True
-            
-        assert found is not None
-        await msg.reply_document(document=found, filename=found.name)
-        return True
-
-    async def _cmd_vaultdelete(self, msg, chat_id: str, args: str, is_admin: bool) -> bool:
-        if not is_admin:
-            await msg.reply_text("⛔ El Baúl es solo para administradores.")
-            return True
-        if not args:
-            await msg.reply_text("Uso: /vaultdelete <etiqueta>")
-            return True
-        
-        tag = sanitize_context(args)
-        vault_dir = self.base_dir / "_vault"
-        
-        if not vault_dir.exists() or not vault_dir.is_dir():
-            await msg.reply_text("❌ El baúl está vacío.")
-            return True
-            
-        found = None
-        for p in vault_dir.iterdir():
-            if p.is_file() and p.stem == tag:
-                found = p
-                break
-                
-        if not found:
-            await msg.reply_text(f"❌ No se encontró nada con la etiqueta '{tag}' en el baúl para eliminar.")
-            return True
-        
-        self.state_store.set_pending_action(chat_id, {
-            "action": "confirm_delete",
-            "target": str(found)
-        })
-        
-        await msg.reply_text(f"⚠️ ¿Estás seguro de que deseas eliminar el archivo importante '{tag}' del baúl? (si/no)")
-        return True
-
-    async def _cmd_preview(self, msg, chat, chat_id: str, args: str, is_admin: bool, allowed_folders: set, context: ContextTypes.DEFAULT_TYPE) -> bool:
-        current_ctx = self.state_store.get_context(chat_id, self.default_context)
-        folder_name = sanitize_context(args.split()[0]) if args else current_ctx
-        
-        if folder_name == "default":
-            await msg.reply_text("⚠️ Estás en la carpeta 'default'. Especifica una carpeta: /preview <carpeta>")
-            return True
-            
-        if not is_admin and folder_name not in allowed_folders:
-            await msg.reply_text(f"⛔ No tienes permiso para acceder a la carpeta '{folder_name}'.")
-            return True
-            
-        target_dir = self.upload_dir / folder_name
-        if folder_name == "root":
-             target_dir = self.upload_dir
-        
-        if not target_dir.exists() or not target_dir.is_dir():
-            await msg.reply_text(f"❌ La carpeta '{folder_name}' no existe.")
-            return True
-            
-        image_extensions = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
-        images: List[Path] = []
-        try:
-            # We search recursively to include date-based subfolders in root
-            for p in target_dir.rglob("*"):
-                if p.is_file() and p.suffix.lower() in image_extensions:
-                    images.append(p)
-        except Exception as e:
-            print(f"[error] Leyendo carpeta para preview: {e}")
-            
-        if not images:
-            await msg.reply_text(f"❌ No se encontraron imágenes en la carpeta '{folder_name}'.")
-            return True
-            
-        # Seleccionar 10 imágenes al azar (o todas si hay menos de 10)
-        limit = 10
-        subset = random.sample(images, min(len(images), limit))
-        
-        # Sort them by name just for consistency in display even if random
-        subset.sort(key=lambda x: x.name)
-        
-        media_group = []
-        # Need to keep file handles open until send_media_group finishes
-        files = []
-        try:
-            for img in subset:
-                f = open(img, "rb")
-                files.append(f)
-                media_group.append(InputMediaPhoto(media=f))
-                
-            await msg.reply_text(f"🎲 Mostrando {len(subset)} imágenes aleatorias de {len(images)} totales.\nCarpeta: '{folder_name}'")
-            await context.bot.send_media_group(chat_id=chat.id, media=media_group)
-            
-        except Exception as e:
-            await msg.reply_text(f"❌ Error al enviar la preview: {e}")
-            print(f"[error] {e}")
-        finally:
-            for f in files:
-                f.close()
-
-        return True
-
-    async def _cmd_vaultlist(self, msg, is_admin: bool) -> bool:
-        if not is_admin:
-            await msg.reply_text("⛔ El Baúl es solo para administradores.")
-            return True
-        vault_dir = self.base_dir / "_vault"
-        if not vault_dir.exists() or not vault_dir.is_dir():
-            await msg.reply_text("📂 El baúl está vacío.")
-            return True
-            
-        tags = []
-        for p in vault_dir.iterdir():
-            if p.is_file():
-                tags.append(p.stem)
-                
-        if not tags:
-            await msg.reply_text("📂 El baúl está vacío.")
-            return True
-            
-        lines = "\n".join(f"- {t}" for t in sorted(tags))
-        await msg.reply_text(f"🔐 Archivos en el baúl ({len(tags)}):\n{lines}")
-        return True
-
-    async def _cmd_access(self, msg, is_admin: bool) -> bool:
-        if not is_admin:
-            await msg.reply_text("⛔ Solo administradores pueden ver la lista de accesos.")
-            return True
-            
-        report = self.state_store.get_access_report()
-        
-        text = "🎟️ *Control de Acceso*\n\n"
-        
-        # Pendientes
-        text += "⏳ *Invitaciones Pendientes (24h)*:\n"
-        if not report["pending"]:
-            text += "_No hay códigos activos_\n"
-        else:
-            for p in report["pending"]:
-                created = datetime.fromisoformat(p["created_at"])
-                # Calcular tiempo restante aprox
-                rem = 24 - (datetime.now(timezone.utc) - created).total_seconds() / 3600
-                text += f"- `{p['code']}` → {p['folder']} | {p['tag']} ({rem:.1f}h rest.)\n"
-        
-        text += "\n👥 *Usuarios con Acceso*:\n"
-        if not report["active"]:
-            text += "_No hay usuarios externos registrados_\n"
-        else:
-            for a in report["active"]:
-                text += f"- User: `{a['chat_id']}` | Carpeta: `{a['folder']}` | Tag: `{a['tag']}`\n"
-                
-        text += "\n_Usa /revoke <ID|tag> para quitar un acceso._"
-        await msg.reply_text(text, parse_mode="Markdown")
-        return True
-
-    async def _cmd_revoke(self, msg, args: str, is_admin: bool) -> bool:
-        if not is_admin:
-            await msg.reply_text("⛔ Solo administradores pueden revocar accesos.")
-            return True
-            
-        if not args:
-            await msg.reply_text("Uso: /revoke <ID_usuario | Tag_etiqueta>")
-            return True
-            
-        target = args.strip()
-        success = self.state_store.revoke_access(target)
-        
-        # Si el target es un chat_id, lo quitamos de .env y memoria
-        if target.isdigit():
-            remove_allowed_chat_id(self.env_path, target)
-            tid = int(target)
-            if tid in self.allowed_chat_ids:
-                self.allowed_chat_ids.remove(tid)
-
-        if success:
-            await msg.reply_text(f"✅ Acceso revocado para: '{target}' (Eliminado del .env si aplica)")
-        else:
-            await msg.reply_text(f"❌ No se encontró ningún acceso con: '{target}'")
-        return True
-
-    async def _cmd_restore_stable(self, msg, is_admin: bool) -> bool:
-        if not is_admin:
-            await msg.reply_text("⛔ Solo administradores pueden restaurar versiones stable.")
-            return True
-        if not self.update_manager:
-            await msg.reply_text("❌ Update Manager no disponible.")
-            return True
-            
-        ok, res = self.update_manager.rollback()
-        await msg.reply_text(res)
-        if ok:
-            # Reiniciar
-            self.update_manager.restart()
-        return True
-
-
-    async def _cmd_list(self, msg, chat_id: str, args: str, is_admin: bool, allowed_folders: set) -> bool:
-        current_ctx = self.state_store.get_context(chat_id, self.default_context)
-        folder_name = sanitize_context(args.split()[0]) if args else current_ctx
-        
-        if folder_name == "default":
-            await msg.reply_text("⚠️ Estás en la carpeta 'default'. Especifica una carpeta: /list <carpeta>")
-            return True
-            
-        if not is_admin and folder_name not in allowed_folders:
-            await msg.reply_text(f"⛔ No tienes permiso para acceder a la carpeta '{folder_name}'.")
-            return True
-            
-        target_dir = self.upload_dir / folder_name
-        if folder_name == "root":
-             target_dir = self.upload_dir
-        
-        if not target_dir.exists() or not target_dir.is_dir():
-            await msg.reply_text(f"❌ La carpeta '{folder_name}' no existe.")
-            return True
-            
-        files = []
-        try:
-            for p in target_dir.iterdir():
-                if p.is_file():
-                    size_kb = p.stat().st_size / 1024
-                    files.append(f"📄 `{p.name}` ({size_kb:.1f} KB)")
-        except Exception as e:
-            print(f"[error] Leyendo carpeta para list: {e}")
-            
-        if not files:
-            await msg.reply_text(f"📂 La carpeta '{folder_name}' está vacía.")
-            return True
-            
-        files.sort()
-        lines = "\n".join(files)
-        await msg.reply_text(f"📂 Archivos en '{folder_name}' (relativo a uploaded_files):\n{lines}")
-        return True
-
-    async def _cmd_help(self, msg, chat_id: str, is_admin: bool) -> bool:
-        current_ctx = self.state_store.get_context(chat_id, self.default_context)
-        current_original = self.state_store.get_require_original(chat_id, self.require_original_default)
-
-        # Base del mensaje
-        help_text = (
-            f"📍 *Estado Actual*\n"
-            f"📁 Carpeta: `{current_ctx}`\n"
-        )
-        
-        if is_admin:
-            help_text += f"📷 Original: {self._fmt_original_status(current_original)}\n\n"
-        else:
-            help_text += "\n"
-
-        # Categorías
-        help_text += (
-            "📂 *Gestión de Carpetas*\n"
-            "/setfolder <nombre> → Cambia de carpeta activa\n"
-            "/folder              → Muestra la carpeta actual\n"
-        )
-        
-        if is_admin:
-            help_text += "/clearfolder         → Vuelve a la carpeta default\n"
-            help_text += "/folders             → Lista todas las carpetas\n\n"
-        else:
-            help_text += "/folders             → Lista tus carpetas permitidas\n\n"
-
-        # Acceso
-        if is_admin:
-            help_text += (
-                "🎟️ *Acceso*\n"
-                "/invite <c> [tag]   → Crea invitación (24h)\n"
-                "/access             → Lista de códigos y usuarios\n"
-                "/revoke <ID|tag>    → Quita el acceso a un usuario\n"
-                "/join <código>      → Unirse a una carpeta\n\n"
-            )
-        else:
-            help_text += (
-                "🎟️ *Acceso*\n"
-                "/join <código>      → Unirse a una carpeta con invitación\n\n"
-            )
-
-        # Archivos
-        help_text += (
-            "📦 *Archivos y Vistas*\n"
-            "/list <carpeta?>      → Lista archivos de una carpeta\n"
-            "/preview <carpeta?>   → Miniaturas aleatorias (10)\n"
-            "/download <archivo>   → Descarga un archivo concreto\n"
-            "/downloadfolder <c?>  → Descarga carpeta en ZIP\n"
-            "/delete <ruta>        → Elimina archivo o carpeta\n\n"
-        )
-
-        # Baúl (Solo Admin)
-        if is_admin:
-            help_text += (
-                "🔐 *Baúl Seguro (Vault)*\n"
-                "/vaultadd <tag>      → Guarda archivo en baúl\n"
-                "/vaultget <tag>      → Recupera archivo de baúl\n"
-                "/vaultdelete <tag>   → Elimina archivo de baúl\n"
-                "/vaultlist           → Lista archivos del baúl\n\n"
-            )
-
-        # Configuración
-        help_text += "🔧 *Configuración*\n"
-        if is_admin:
-            help_text += "/original on|off     → Calidad de imagen (ON/OFF)\n"
-            help_text += "/status              → Ver estado del sistema y disco\n"
-            help_text += "/formats <list|add|remove> → Gestionar formatos permitidos\n"
-            help_text += "/restore\\_stable      → Recuperar última versión estable\n"
-        
-        help_text += "/help                → Muestra este menú\n\n"
-        help_text += "*Nota:* Si no especificas <carpeta> en los comandos marcados con '?', se usará tu carpeta activa."
-        
-        await msg.reply_text(help_text, parse_mode="Markdown")
-        return True
+        return self._is_allowed(update)
 
     async def _handle_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         msg = update.effective_message
@@ -829,101 +79,66 @@ class TelegramAdapter:
         if not text.startswith("/"):
             return False
 
-        # Extraer el comando exacto (se usa maxsplit=1 para obtener comando + posibles args)
         parts = text.split(maxsplit=1)
         command = parts[0].lower()
         args = parts[1].strip() if len(parts) > 1 else ""
 
         chat_id = str(chat.id)
         is_admin = self._is_admin(update)
-        allowed_folders = set(self.state_store.get_allowed_folders(chat_id))
 
-        # Command blocking for maintenance
-        is_maintenance_cmd = command in ["/maintenance"]
-        if not self.commands_enabled and command not in ["/help", "/resetservice", "/join"] and not is_maintenance_cmd:
-             await msg.reply_text("⚠️ Los comandos están desactivados temporalmente por mantenimiento (fase de pruebas).")
-             return True
-
-        if command == "/resetservice":
-            return await self._cmd_resetservice(msg, is_admin)
-        elif command == "/maintenance":
-            return await self._cmd_maintenance(msg, args, is_admin)
-        elif command in ["/startapi", "/stopapi", "/restartapi"]:
-            return await self._cmd_manage_api(msg, command, is_admin)
-        elif command == "/invite":
-            return await self._cmd_invite(msg, args, is_admin)
-        elif command == "/access":
-            return await self._cmd_access(msg, is_admin)
-        elif command == "/revoke":
-            return await self._cmd_revoke(msg, args, is_admin)
-        elif command == "/join":
-            return await self._cmd_join(msg, chat_id, args)
-        elif command == "/setfolder":
-            return await self._cmd_setfolder(msg, chat_id, args, is_admin, allowed_folders)
-        elif command == "/clearfolder":
-            return await self._cmd_clearfolder(msg, chat_id, is_admin)
-        elif command == "/folders":
-            return await self._cmd_folders(msg, is_admin, allowed_folders)
-        elif command == "/folder":
-            return await self._cmd_folder(msg, chat_id)
-        elif command == "/original":
-            return await self._cmd_original(msg, chat_id, args, is_admin)
-        elif command == "/downloadfolder":
-            return await self._cmd_downloadfolder(msg, chat_id, args, is_admin, allowed_folders)
-        elif command == "/download":
-            return await self._cmd_download(msg, args, is_admin, allowed_folders)
-        elif command == "/list":
-            return await self._cmd_list(msg, chat_id, args, is_admin, allowed_folders)
-        elif command == "/delete":
-            return await self._cmd_delete(msg, chat_id, args, is_admin, allowed_folders)
-        elif command == "/vaultadd":
-            return await self._cmd_vaultadd(msg, chat_id, args, is_admin)
-        elif command == "/vaultget":
-            return await self._cmd_vaultget(msg, args, is_admin)
-        elif command == "/vaultdelete":
-            return await self._cmd_vaultdelete(msg, chat_id, args, is_admin)
-        elif command == "/preview":
-            return await self._cmd_preview(msg, chat, chat_id, args, is_admin, allowed_folders, context)
-        elif command == "/vaultlist":
-            return await self._cmd_vaultlist(msg, is_admin)
+        if command == "/system_reboot":
+            return await self._cmd_system_reboot(msg, is_admin)
+        elif command == "/get_access":
+            return await self._cmd_get_access(msg, is_admin)
         elif command == "/status":
             return await self._cmd_status(msg, chat_id, is_admin)
-        elif command == "/formats":
-            return await self._cmd_formats(msg, args, is_admin)
-        elif command == "/restore_stable":
-            return await self._cmd_restore_stable(msg, is_admin)
         elif command == "/help":
-            return await self._cmd_help(msg, chat_id, is_admin)
-
+            return await self._cmd_help(msg, is_admin)
+        elif command == "/resetservice":
+            # Alias for backward compatibility if user types it out of habit
+            return await self._cmd_get_access(msg, is_admin)
+            
+        # Desactivamos los comandos antiguos.
         return False
 
-    async def _cmd_status(self, msg, chat_id: str, is_admin: bool) -> bool:
-        # reportar solo si es admin
+    async def _cmd_system_reboot(self, msg, is_admin: bool) -> bool:
         if not is_admin:
             await msg.reply_text("⛔ Solo administradores.")
             return True
+        await msg.reply_text("🔄 Reiniciando el sistema Raspberry Pi en 3 segundos...")
+        await asyncio.sleep(3)
+        try:
+            subprocess.run(["sudo", "reboot"], check=False)
+        except Exception as e:
+            await msg.reply_text(f"❌ Error al reiniciar: {e}")
+        return True
 
-        # Carpeta actual del chat
-        ctx = self.state_store.get_context(chat_id, self.default_context)
-        require_orig = self.state_store.get_require_original(chat_id, self.require_original_default)
+    async def _cmd_status(self, msg, chat_id: str, is_admin: bool) -> bool:
+        if not is_admin:
+            await msg.reply_text("⛔ Solo administradores.")
+            return True
 
         # Espacio en disco
         total, used, free = shutil.disk_usage(self.base_dir)
         pct = (used / total) * 100
 
+        # RAM
+        import psutil
+        mem = psutil.virtual_memory()
+        cpu = psutil.cpu_percent(interval=0.5)
+
         # Estado de la API (Servicio independiente)
         api_status = self._get_service_status("vault_api")
+        bot_status = self._get_service_status("vault_bot")
 
         text = (
             "📊 *Estado del Sistema*\n\n"
-            f"📁 *Carpeta activa:* `{ctx}`\n"
-            f"💎 *Originales:* `{'ON' if require_orig else 'OFF'}`\n"
-            f"🛠️ *Mantenimiento:* `{'SÍ' if not self.commands_enabled else 'NO'}`\n"
-            f"🚀 *API Storage:* {api_status}\n\n"
+            f"🚀 *API Storage:* {api_status}\n"
+            f"🤖 *Bot Agent:* {bot_status}\n\n"
+            f"🧠 *CPU:* {cpu}%\n"
+            f"⚡ *RAM:* {mem.percent}% ({mem.used / (1024**3):.1f}GB / {mem.total / (1024**3):.1f}GB)\n"
             f"💾 *Disco:* {pct:.1f}% ocupado\n"
-            f"└ Total: {total / (1024**3):.1f} GB\n"
-            f"└ Libre: {free / (1024**3):.1f} GB\n"
-            f"└ Ruta: `{self.base_dir}`"
+            f"└ Libre: {free / (1024**3):.1f} GB de {total / (1024**3):.1f} GB\n"
         )
         await msg.reply_text(text, parse_mode="Markdown")
         return True
@@ -932,7 +147,6 @@ class TelegramAdapter:
         if os.name != "posix":
             return "N/A (Windows)"
         try:
-            import subprocess
             res = subprocess.run(["systemctl", "is-active", service_name], capture_output=True, text=True, timeout=2)
             status = res.stdout.strip()
             if status == "active": return "✅ Online"
@@ -942,103 +156,113 @@ class TelegramAdapter:
         except Exception:
             return "❔ Desconocido"
 
-    async def _cmd_maintenance(self, msg, args: str, is_admin: bool) -> bool:
+    async def _cmd_help(self, msg, is_admin: bool) -> bool:
         if not is_admin:
-            await msg.reply_text("⛔ Solo administradores.")
             return True
-        
-        if not args:
-            await msg.reply_text(f"🛠️ Mantenimiento: {'SÍ (Comandos bloqueados)' if not self.commands_enabled else 'NO'}\nUso: /maintenance <on|off>")
-            return True
-        
-        arg = args.lower()
-        if arg in ("on", "si", "sí", "true"):
-            self.commands_enabled = False
-            self.state_store.set_maintenance_mode(True)
-            await msg.reply_text("🛠️ Mantenimiento ACTIVADO. Los comandos de usuario han sido bloqueados.")
-            return True
-        elif arg in ("off", "no", "false"):
-            self.commands_enabled = True
-            self.state_store.set_maintenance_mode(False)
-            await msg.reply_text("✅ Mantenimiento DESACTIVADO. Todos los comandos están disponibles.")
-            return True
-        
-        await msg.reply_text("Uso: /maintenance on | off")
+
+        help_text = (
+            "🤖 *Vault OS Agent - Comandos Administrativos*\n\n"
+            "/system_reboot  → Reinicia la Raspberry Pi\n"
+            "/get_access     → Reinicia la API y muestra QR de vinculación\n"
+            "/status         → Ver métricas (CPU, RAM, Disco) y servicios\n"
+            "/help           → Muestra este menú\n\n"
+            "💬 *Asistente IA*: Cualquier otro mensaje de texto será procesado "
+            "automáticamente por el Agente de IA para administración y desarrollo."
+        )
+        await msg.reply_text(help_text, parse_mode="Markdown")
         return True
 
-    async def _cmd_manage_api(self, msg, command: str, is_admin: bool) -> bool:
+    async def _notify_reset_complete(self, target_chat: str, application: Optional[Application] = None):
+        """Espera a que la API esté lista y envía el QR al usuario."""
+        bot = application.bot if application else self.bot
+        reset_file = self.base_dir / "state" / ".reset_pending"
+
+        if not reset_file.exists():
+            return
+
+        print(f"[reset] Iniciando espera de API para chat {target_chat}...")
+        try:
+            await bot.send_message(chat_id=target_chat, text="⏳ El sistema se está reiniciando. Te avisaré en cuanto la conexión esté lista...")
+
+            port = int(os.getenv("API_PORT", "8001"))
+            recovery_param = ""
+            recovery_file = Path("vault_internal/.recovery_token")
+            if recovery_file.exists():
+                recovery_param = f"?recovery={recovery_file.read_text().strip()}"
+            
+            api_url = f"http://localhost:{port}/api/auth/request{recovery_param}"
+            
+            data = None
+            for i in range(20):
+                if not reset_file.exists():
+                    return
+                try:
+                    resp = requests.get(api_url, timeout=5)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        break
+                    elif resp.status_code == 403:
+                        await bot.send_message(chat_id=target_chat, text="⚠️ El sistema ha arrancado pero el dispositivo administrador ya está vinculado.")
+                        if reset_file.exists(): reset_file.unlink()
+                        return
+                except:
+                    await asyncio.sleep(3)
+            
+            if data and reset_file.exists():
+                url = data['url']
+                pin = data['pin']
+                
+                qr = qrcode.QRCode(version=1, box_size=10, border=1)
+                qr.add_data(json.dumps({"url": url, "pin": pin}))
+                qr.make(fit=True)
+                img = qr.make_image(fill_color="black", back_color="white")
+                
+                img_byte_arr = io.BytesIO()
+                img.save(img_byte_arr, format='PNG')
+                img_byte_arr.seek(0)
+                
+                await bot.send_photo(
+                    chat_id=target_chat,
+                    photo=img_byte_arr,
+                    caption=(
+                        "✅ *Sistema Listo*\n\n"
+                        f"🔗 *URL:* `{url}`\n"
+                        f"🔢 *PIN:* `{pin}`\n\n"
+                        "Ya puedes vincular tu dispositivo móvil."
+                    ),
+                    parse_mode="Markdown"
+                )
+                if reset_file.exists(): reset_file.unlink()
+            elif reset_file.exists():
+                await bot.send_message(chat_id=target_chat, text="❌ La API tardó demasiado en responder. Prueba a usar `/status` en unos momentos.")
+                if reset_file.exists(): reset_file.unlink()
+                
+        except Exception as e:
+            print(f"[error] Notify reset failure: {e}")
+
+    async def _cmd_get_access(self, msg, is_admin: bool) -> bool:
         if not is_admin:
             await msg.reply_text("⛔ Solo administradores.")
             return True
+            
+        chat_id = str(msg.chat_id)
+        try:
+            reset_file = self.base_dir / "state" / ".reset_pending"
+            reset_file.parent.mkdir(parents=True, exist_ok=True)
+            reset_file.write_text(chat_id, encoding="utf-8")
+        except Exception as e:
+            await msg.reply_text(f"❌ Error al preparar el reinicio: {e}")
+            return True
 
-        import subprocess
-        action = command.replace("/api", "").replace("/", "") # start, stop, restart
-        if action == "startapi": action = "start"
-        elif action == "stopapi": action = "stop"
-        elif action == "restartapi": action = "restart"
-
-        await msg.reply_text(f"⏳ Ejecutando `{action}` en el servicio `vault_api`...")
+        await msg.reply_text("🔄 Reiniciando API de almacenamiento y actualizando conexión...\nEspera unos segundos.", parse_mode="Markdown")
         
         try:
-            # Intentamos ejecutar systemctl
-            res = subprocess.run(["sudo", "systemctl", action, "vault_api"], capture_output=True, text=True, timeout=10)
-            if res.returncode == 0:
-                await msg.reply_text(f"✅ Operación `{action}` completada con éxito.")
-            else:
-                await msg.reply_text(f"❌ Error al gestionar el servicio:\n`{res.stderr.strip()}`", parse_mode="Markdown")
+            subprocess.Popen(["bash", "run_vault.sh"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            asyncio.create_task(self._notify_reset_complete(chat_id))
         except Exception as e:
-            await msg.reply_text(f"❌ Fallo crítico al ejecutar comando: {e}")
-        
-        return True
-
-    async def _cmd_formats(self, msg, args: str, is_admin: bool) -> bool:
-        if not is_admin:
-            await msg.reply_text("⛔ Solo administradores.")
-            return True
-        
-        parts = args.split()
-        sub = parts[0].lower() if parts else "list"
-
-        formats = self.state_store.get_global_setting("file_formats", CONTENT_TYPE_EXT.copy())
-
-        if sub == "list":
-            text = "📄 *Formatos Aceptados*\n\n"
-            if not formats:
-                text += "_No hay formatos específicos configurados._"
-            else:
-                for ct, ext in formats.items():
-                    text += f"• `{ct}` → `{ext}`\n"
-            await msg.reply_text(text, parse_mode="Markdown")
-            return True
-
-        if sub == "add":
-            if len(parts) < 3:
-                await msg.reply_text("Uso: `/formats add <mimetype> <ext>`\nEj: `/formats add image/gif .gif`", parse_mode="Markdown")
-                return True
-            mimetype = parts[1].lower()
-            ext = parts[2].lower()
-            if not ext.startswith("."):
-                ext = "." + ext
+            await msg.reply_text(f"❌ Error al lanzar el script: {e}")
+            if reset_file.exists(): reset_file.unlink()
             
-            formats[mimetype] = ext
-            self.state_store.set_global_setting("file_formats", formats)
-            await msg.reply_text(f"✅ Formato añadido: `{mimetype}` → `{ext}`", parse_mode="Markdown")
-            return True
-
-        if sub == "remove":
-            if len(parts) < 2:
-                await msg.reply_text("Uso: `/formats remove <mimetype>`", parse_mode="Markdown")
-                return True
-            mimetype = parts[1].lower()
-            if mimetype in formats:
-                del formats[mimetype]
-                self.state_store.set_global_setting("file_formats", formats)
-                await msg.reply_text(f"✅ Formato eliminado: `{mimetype}`", parse_mode="Markdown")
-            else:
-                await msg.reply_text(f"❌ El formato `{mimetype}` no está en la lista.", parse_mode="Markdown")
-            return True
-
-        await msg.reply_text("Comando inválido. Usa `/formats [list|add|remove]`", parse_mode="Markdown")
         return True
 
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1047,108 +271,44 @@ class TelegramAdapter:
             return
 
         chat = update.effective_chat
-        if chat:
-            print(f"[telegram] chat_id={chat.id} type={chat.type}")
-
         if not self._is_allowed(update):
-            #await msg.reply_text("⛔ No autorizado.")
+            # Strict mode: Only ALLOWED_CHAT_IDS can interact.
             return
 
         chat_id = str(chat.id) if chat else "unknown"
         is_admin = self._is_admin(update)
-        allowed_folders = set(self.state_store.get_allowed_folders(chat_id))
-
-        # Doble check: si no es admin, no tiene folders y no es /join, ignoramos
-        msg_text = msg.text or msg.caption or ""
-        if not is_admin and not allowed_folders and not msg_text.strip().startswith("/join"):
-            return
 
         if self.reduced_mode:
-            if msg_text.startswith("/status"):
-                await msg.reply_text(f"🔴 *MODO REDUCIDO ACTIVADO*\n\n{self.reduced_mode_error}\n\nEl bot no aceptará archivos hasta que se solucione el problema de almacenamiento.", parse_mode="Markdown")
+            if msg.text and msg.text.startswith("/status"):
+                await msg.reply_text(f"🔴 *MODO REDUCIDO ACTIVADO*\n\n{self.reduced_mode_error}\n\nEl bot no aceptará archivos hasta que se solucione.", parse_mode="Markdown")
                 return
-            if not msg_text.startswith("/"):
-                # No procesar archivos ni texto normal
+            await msg.reply_text(f"⚠️ El bot está en modo reducido debido a un error de almacenamiento:\n`{self.reduced_mode_error}`\nUsar /status para ver detalles.", parse_mode="Markdown")
+            return
+
+        # 1. Comandos
+        if msg.text and msg.text.strip().startswith("/"):
+            handled = await self._handle_command(update, context)
+            if handled:
                 return
-            if is_admin:
-                await msg.reply_text(f"⚠️ El bot está en modo reducido debido a un error de almacenamiento:\n`{self.reduced_mode_error}`\nUsar /status para ver detalles.", parse_mode="Markdown")
+
+        # 2. Textos libres -> Agente LLM
+        if msg.text:
+            text = msg.text.strip()
+            processing_msg = await msg.reply_text("🧠 *Agente analizando...*", parse_mode="Markdown")
+            try:
+                response = await self.agent.chat_message(text)
+                await processing_msg.edit_text(response, parse_mode="Markdown")
+            except Exception as e:
+                await processing_msg.edit_text(f"❌ Error del Agente: {e}", parse_mode="Markdown")
             return
 
-        handled = await self._handle_command(update, context)
-        if handled:
-            return
-
-        chat_id = str(chat.id) if chat else "unknown"
-        is_admin = self._is_admin(update)
-        allowed_folders = set(self.state_store.get_allowed_folders(chat_id))
-        current_ctx = self.state_store.get_context(chat_id, self.default_context)
-
-        # Check permissions for upload
-        if not is_admin and current_ctx not in allowed_folders:
-            return
-
-        pending = self.state_store.get_pending_action(chat_id)
-        if pending and msg.text:
-            ans = msg.text.strip().lower()
-            if pending.get("action") == "confirm_setfolder":
-                if ans in ("si", "sí", "s", "yes", "y"):
-                    folder = pending.get("folder")
-                    self.state_store.set_context(chat_id, folder)
-                    self.state_store.clear_pending_action(chat_id)
-                    await msg.reply_text(f"📁 Carpeta activa: {folder}")
-                    return
-                elif ans in ("no", "n"):
-                    self.state_store.clear_pending_action(chat_id)
-                    await msg.reply_text("❌ Acción cancelada.")
-                    return
-                else:
-                    await msg.reply_text("Por favor responde 'si' o 'no' a la pregunta del /setfolder pendiente.")
-                    return
-            
-            elif pending.get("action") == "confirm_delete":
-                if ans in ("si", "sí", "s", "yes", "y"):
-                    target_str = pending.get("target")
-                    self.state_store.clear_pending_action(chat_id)
-                    if target_str:
-                        target = Path(target_str)
-                        if target.exists():
-                            try:
-                                if target.is_dir():
-                                    shutil.rmtree(target)
-                                else:
-                                    target.unlink()
-                                await msg.reply_text("✅ Eliminado con éxito.")
-                            except Exception as e:
-                                await msg.reply_text(f"❌ Error al eliminar: {e}")
-                        else:
-                            await msg.reply_text("❌ El objetivo ya no existe.")
-                    return
-                elif ans in ("no", "n"):
-                    self.state_store.clear_pending_action(chat_id)
-                    await msg.reply_text("❌ Eliminación cancelada.")
-                    return
-                else:
-                    await msg.reply_text("Por favor responde 'si' o 'no' para confirmar la eliminación.")
-                    return
-            
-            elif pending.get("action") == "confirm_apply_update" and msg.text:
-                if msg.text.strip().upper() == "ACEPTAR ACTUALIZACION":
-                    await msg.reply_text("🚀 Aplicando cambios y reiniciando sistema...")
-                    self.update_manager.apply_update()
-                    self.update_manager.restart()
-                    return
-                elif msg.text.strip().lower() in ("no", "cancelar", "n"):
-                    self.state_store.clear_pending_action(chat_id)
-                    await msg.reply_text("❌ Actualización cancelada.")
-                    return
-
+        # 3. Procesamiento de archivos
         sender = update.effective_user
         sender_id = str(sender.id) if sender else "unknown"
         sender_name = sender.full_name if sender else None
-
-        chat_id = str(chat.id) if chat else "unknown"
-        ctx = self.state_store.get_context(chat_id, self.default_context)
-        require_original = self.state_store.get_require_original(chat_id, self.require_original_default)
+        
+        # En esta nueva versión el contexto siempre es 'default' o 'root', se simplifica el manejo de subcarpetas por chat
+        ctx = self.default_context
 
         tg_file = None
         content_type = None
@@ -1174,7 +334,7 @@ class TelegramAdapter:
             kind = "video"
 
         elif msg.photo:
-            if require_original:
+            if self.require_original_default:
                 await msg.reply_text(
                     "❗ Original ON: para conservar la calidad, envía la imagen como *Archivo/Documento* (sin compresión)."
                 )
@@ -1192,45 +352,6 @@ class TelegramAdapter:
 
         if self.max_bytes and self.max_bytes > 0 and size_bytes and size_bytes > self.max_bytes:
             await msg.reply_text(f"❌ Archivo demasiado grande ({size_bytes} bytes).")
-            return
-
-        if pending and pending.get("action") == "await_vault":
-            tag = pending.get("tag")
-            self.state_store.clear_pending_action(chat_id)
-            
-            if not tag:
-                await msg.reply_text("❌ Error: Etiqueta no válida en el baúl.")
-                return
-                
-            file_obj = await context.bot.get_file(tg_file.file_id)
-            file_url = file_obj.file_path
-            
-            ext = ext_from_content_type(content_type)
-            vault_dir = self.base_dir / "_vault"
-            vault_dir.mkdir(parents=True, exist_ok=True)
-            
-            dest_path = vault_dir / f"{tag}{ext}"
-
-            def stream() -> Iterator[bytes]:
-                with requests.get(file_url, stream=True, timeout=60) as r:
-                    r.raise_for_status()
-                    total = 0
-                    for chunk in r.iter_content(chunk_size=256 * 1024):
-                        if not chunk:
-                            continue
-                        total += len(chunk)
-                        if self.max_bytes and self.max_bytes > 0 and total > self.max_bytes:
-                            raise ValueError("Archivo excede MAX_BYTES durante descarga")
-                        yield chunk
-
-            try:
-                atomic_write(dest_path, stream(), fsync=True)
-                await msg.reply_text(f"✅ Archivo guardado secretamente en el baúl bajo la etiqueta: '{tag}'")
-            except Exception as e:
-                await msg.reply_text(f"❌ Error guardando en el baúl: {e}")
-                print(f"[error] {e}")
-            
-            # Stop further processing
             return
 
         file_obj = await context.bot.get_file(tg_file.file_id)
@@ -1291,117 +412,10 @@ class TelegramAdapter:
             await msg.reply_text(f"❌ Error guardando: {e}")
             print(f"[error] {e}")
 
-
-    async def _notify_reset_complete(self, target_chat: str, application: Optional[Application] = None):
-        """Espera a que la API esté lista y envía el QR al usuario."""
-        # Usar el bot de la aplicación si se proporciona, si no el bot interno
-        bot = application.bot if application else self.bot
-        reset_file = self.base_dir / "state" / ".reset_pending"
-
-        # Verificar si otro proceso ya lo gestionó (para evitar duplicados)
-        if not reset_file.exists():
-            return
-
-        print(f"[reset] Iniciando espera de API para chat {target_chat}...")
-        try:
-            # Notificar que estamos en ello
-            await bot.send_message(chat_id=target_chat, text="⏳ El sistema se está reiniciando. Te avisaré en cuanto la conexión esté lista...")
-
-            import json, qrcode, io, requests, time
-            port = int(os.getenv("API_PORT", "8001"))
-            recovery_param = ""
-            recovery_file = Path("vault_internal/.recovery_token")
-            if recovery_file.exists():
-                recovery_param = f"?recovery={recovery_file.read_text().strip()}"
-            
-            api_url = f"http://localhost:{port}/api/auth/request{recovery_param}"
-            
-            data = None
-            for i in range(20): # Hasta 60 segundos de espera
-                if not reset_file.exists(): # Si otro proceso (como un bot reiniciado) ya lo borró, paramos
-                    return
-                try:
-                    resp = requests.get(api_url, timeout=5)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        break
-                    elif resp.status_code == 403:
-                        await bot.send_message(chat_id=target_chat, text="⚠️ El sistema ha arrancado pero el dispositivo administrador ya está vinculado.")
-                        if reset_file.exists(): reset_file.unlink()
-                        return
-                except:
-                    await asyncio.sleep(3)
-            
-            if data and reset_file.exists():
-                url = data['url']
-                pin = data['pin']
-                
-                qr = qrcode.QRCode(version=1, box_size=10, border=1)
-                qr.add_data(json.dumps({"url": url, "pin": pin}))
-                qr.make(fit=True)
-                img = qr.make_image(fill_color="black", back_color="white")
-                
-                img_byte_arr = io.BytesIO()
-                img.save(img_byte_arr, format='PNG')
-                img_byte_arr.seek(0)
-                
-                await bot.send_photo(
-                    chat_id=target_chat,
-                    photo=img_byte_arr,
-                    caption=(
-                        "✅ *Sistema Listo*\n\n"
-                        f"🔗 *URL:* `{url}`\n"
-                        f"🔢 *PIN:* `{pin}`\n\n"
-                        "Ya puedes vincular tu dispositivo móvil."
-                    ),
-                    parse_mode="Markdown"
-                )
-                if reset_file.exists(): reset_file.unlink()
-            elif reset_file.exists():
-                await bot.send_message(chat_id=target_chat, text="❌ La API tardó demasiado en responder. Prueba a usar `/status` en unos momentos.")
-                if reset_file.exists(): reset_file.unlink()
-                
-        except Exception as e:
-            print(f"[error] Notify reset failure: {e}")
-
-    async def _cmd_resetservice(self, msg, is_admin: bool) -> bool:
-        if not is_admin:
-            await msg.reply_text("⛔ Solo administradores pueden reiniciar el servicio.")
-            return True
-            
-        chat_id = str(msg.chat_id)
-        # 1. Guardar estado para persistencia
-        try:
-            reset_file = self.base_dir / "state" / ".reset_pending"
-            reset_file.parent.mkdir(parents=True, exist_ok=True)
-            reset_file.write_text(chat_id, encoding="utf-8")
-        except Exception as e:
-            await msg.reply_text(f"❌ Error al preparar el reinicio: {e}")
-            return True
-
-        await msg.reply_text("🔄 Reiniciando API de almacenamiento y actualizando conexión...\nEspera unos segundos.", parse_mode="Markdown")
-        
-        try:
-            import subprocess
-            # Ejecutar el script de arranque (esto reinicia la API)
-            subprocess.Popen(["bash", "run_vault.sh"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-            
-            # Lanzar tarea de espera en segundo plano para notificar al terminar
-            asyncio.create_task(self._notify_reset_complete(chat_id))
-            
-        except Exception as e:
-            await msg.reply_text(f"❌ Error al lanzar el script: {e}")
-            if reset_file.exists(): reset_file.unlink()
-            
-        return True
-
     def run(self) -> None:
         async def send_startup_alerts(application: Application):
             print("[startup] Ejecutando alertas de inicio...")
-            # 1. Notificación estándar de arranque
-            startup_msg = "🤖 *Vault Bot está en línea*"
-            if not self.commands_enabled:
-                 startup_msg += "\n⚠️ _Modo mantenimiento: Comandos desactivados._"
+            startup_msg = "🤖 *Vault OS Agent está en línea*\nListo para recibir comandos o administrar el sistema."
             
             for admin_id in self.allowed_chat_ids:
                 try: 
@@ -1409,7 +423,6 @@ class TelegramAdapter:
                 except Exception as e:
                     print(f"[startup] Error enviando saludo a {admin_id}: {e}")
 
-            # 2. Verificar si venimos de un /resetservice (tras un reinicio real del proceso)
             reset_file = self.base_dir / "state" / ".reset_pending"
             if reset_file.exists():
                 try:
@@ -1418,19 +431,14 @@ class TelegramAdapter:
                 except Exception as e:
                     print(f"[error] Startup reset check: {e}")
 
-            # 3. Alerta de almacenamiento reducido (si aplica)
             if self.reduced_mode:
                 alert = f"🚨 *ALERTA DE ALMACENAMIENTO*\n\nError: `{self.reduced_mode_error}`"
                 for admin_id in self.allowed_chat_ids:
                     try: await application.bot.send_message(chat_id=admin_id, text=alert, parse_mode="Markdown")
                     except: pass
 
-        # Construir aplicación con post_init integrado
         app = Application.builder().token(self.token).post_init(send_startup_alerts).build()
-        
         app.add_handler(MessageHandler(filters.ALL, self._handle_message))
-        app.add_handler(CallbackQueryHandler(self._on_callback_query))
         
         print(f"[telegram] Bot arrancado (polling). ReducedMode={self.reduced_mode}")
         app.run_polling(close_loop=False, stop_signals=None)
-
