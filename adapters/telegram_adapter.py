@@ -172,46 +172,59 @@ class TelegramAdapter:
         await msg.reply_text(help_text, parse_mode="Markdown")
         return True
 
-    async def _notify_reset_complete(self, target_chat: str, application: Optional[Application] = None):
-        """Espera a que la API esté lista y envía el QR al usuario."""
-        bot = application.bot if application else self.bot
-        reset_file = self.base_dir / "state" / ".reset_pending"
+    async def _cmd_get_access(self, msg, is_admin: bool) -> bool:
+        if not is_admin:
+            await msg.reply_text("⛔ Solo administradores.")
+            return True
 
-        if not reset_file.exists():
-            return
+        chat_id = str(msg.chat_id)
+        status_msg = await msg.reply_text(
+            "🔄 *Ejecutando run_vault.sh y reiniciando API...*\n"
+            "Esto puede tardar hasta 45 segundos mientras se verifica la conexión y el túnel Cloudflare. Por favor, espera...",
+            parse_mode="Markdown"
+        )
 
-        print(f"[reset] Iniciando espera de API para chat {target_chat}...")
         try:
-            await bot.send_message(chat_id=target_chat, text="⏳ El sistema se está reiniciando. Te avisaré en cuanto la conexión esté lista...")
+            # Resolving project directory
+            project_dir = Path(__file__).resolve().parent.parent
+            script_path = project_dir / "run_vault.sh"
 
-            port = int(os.getenv("API_PORT", "8001"))
-            recovery_param = ""
-            recovery_file = Path("vault_internal/.recovery_token")
-            if recovery_file.exists():
-                recovery_param = f"?recovery={recovery_file.read_text().strip()}"
+            # Ejecutar run_vault.sh de forma asíncrona y esperar al resultado
+            proc = await asyncio.create_subprocess_exec(
+                "bash", str(script_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(project_dir)
+            )
+
+            stdout_bytes, stderr_bytes = await proc.communicate()
+            stdout = stdout_bytes.decode("utf-8", errors="ignore")
+            stderr = stderr_bytes.decode("utf-8", errors="ignore")
+
+            print(f"[get_access] run_vault.sh finalizado con código {proc.returncode}")
+
+            import re
+            ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+            clean_stdout = ansi_escape.sub('', stdout)
+
+            url = None
+            pin = None
             
-            api_url = f"http://localhost:{port}/api/auth/request{recovery_param}"
-            
-            data = None
-            for i in range(20):
-                if not reset_file.exists():
-                    return
-                try:
-                    resp = requests.get(api_url, timeout=5)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        break
-                    elif resp.status_code == 403:
-                        await bot.send_message(chat_id=target_chat, text="⚠️ El sistema ha arrancado pero el dispositivo administrador ya está vinculado.")
-                        if reset_file.exists(): reset_file.unlink()
-                        return
-                except:
-                    await asyncio.sleep(3)
-            
-            if data and reset_file.exists():
-                url = data['url']
-                pin = data['pin']
-                
+            for line in clean_stdout.splitlines():
+                if "URL:" in line:
+                    url = line.split("URL:", 1)[1].strip()
+                if "PIN:" in line:
+                    pin = line.split("PIN:", 1)[1].strip()
+
+            if "ADMIN DEVICE ALREADY LINKED" in clean_stdout:
+                await status_msg.edit_text(
+                    "⚠️ *Dispositivo Administrador ya Vinculado*\n\n"
+                    "El sistema ha arrancado correctamente, pero el dispositivo administrador ya está vinculado.\n"
+                    "Si has perdido el acceso o necesitas desvincularlo, elimina el archivo `devices.json` en tu almacenamiento y vuelve a ejecutar `/get_access`.",
+                    parse_mode="Markdown"
+                )
+            elif url and pin:
+                # Generar QR
                 qr = qrcode.QRCode(version=1, box_size=10, border=1)
                 qr.add_data(json.dumps({"url": url, "pin": pin}))
                 qr.make(fit=True)
@@ -221,8 +234,8 @@ class TelegramAdapter:
                 img.save(img_byte_arr, format='PNG')
                 img_byte_arr.seek(0)
                 
-                await bot.send_photo(
-                    chat_id=target_chat,
+                await status_msg.delete()
+                await msg.reply_photo(
                     photo=img_byte_arr,
                     caption=(
                         "✅ *Sistema Listo*\n\n"
@@ -232,37 +245,19 @@ class TelegramAdapter:
                     ),
                     parse_mode="Markdown"
                 )
-                if reset_file.exists(): reset_file.unlink()
-            elif reset_file.exists():
-                await bot.send_message(chat_id=target_chat, text="❌ La API tardó demasiado en responder. Prueba a usar `/status` en unos momentos.")
-                if reset_file.exists(): reset_file.unlink()
+            else:
+                err_msg = "❌ *Error al configurar el acceso*\n\n"
+                if "Timeout" in clean_stdout:
+                    err_msg += "⏳ Tiempo de espera agotado. La API o el túnel Cloudflare tardaron demasiado en responder."
+                else:
+                    err_msg += "Ocurrió un error inesperado durante la ejecución del script. Detalles:\n"
+                    err_msg += f"```\n{clean_stdout[-300:]}\n{stderr[-300:]}\n```"
                 
-        except Exception as e:
-            print(f"[error] Notify reset failure: {e}")
+                await status_msg.edit_text(err_msg, parse_mode="Markdown")
 
-    async def _cmd_get_access(self, msg, is_admin: bool) -> bool:
-        if not is_admin:
-            await msg.reply_text("⛔ Solo administradores.")
-            return True
-            
-        chat_id = str(msg.chat_id)
-        try:
-            reset_file = self.base_dir / "state" / ".reset_pending"
-            reset_file.parent.mkdir(parents=True, exist_ok=True)
-            reset_file.write_text(chat_id, encoding="utf-8")
         except Exception as e:
-            await msg.reply_text(f"❌ Error al preparar el reinicio: {e}")
-            return True
+            await status_msg.edit_text(f"❌ *Error al lanzar el comando:* {e}", parse_mode="Markdown")
 
-        await msg.reply_text("🔄 Reiniciando API de almacenamiento y actualizando conexión...\nEspera unos segundos.", parse_mode="Markdown")
-        
-        try:
-            subprocess.Popen(["bash", "run_vault.sh"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-            asyncio.create_task(self._notify_reset_complete(chat_id))
-        except Exception as e:
-            await msg.reply_text(f"❌ Error al lanzar el script: {e}")
-            if reset_file.exists(): reset_file.unlink()
-            
         return True
 
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -447,14 +442,6 @@ class TelegramAdapter:
                     await application.bot.send_message(chat_id=admin_id, text=startup_msg, parse_mode="Markdown")
                 except Exception as e:
                     print(f"[startup] Error enviando saludo a {admin_id}: {e}")
-
-            reset_file = self.base_dir / "state" / ".reset_pending"
-            if reset_file.exists():
-                try:
-                    target_chat = reset_file.read_text().strip()
-                    await self._notify_reset_complete(target_chat, application=application)
-                except Exception as e:
-                    print(f"[error] Startup reset check: {e}")
 
             if self.reduced_mode:
                 alert = f"🚨 *ALERTA DE ALMACENAMIENTO*\n\nError: `{self.reduced_mode_error}`"

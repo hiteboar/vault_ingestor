@@ -188,22 +188,70 @@ class MetadataManager:
         self._cache = {}
         
     def load(self):
-        """Loads the metadata log into RAM for instant searches."""
+        """Loads the metadata log into RAM for instant searches, auto-healing incorrect paths on startup."""
         if not META_LOG.exists():
             return
+        
+        # 1. Escanear archivos físicos reales bajo el STORAGE_DIR actual
+        base_upload = STORAGE_DIR / "uploaded_files"
+        physical_files = {}
+        try:
+            if base_upload.exists():
+                for p in base_upload.rglob("*"):
+                    if p.is_file() and not p.name.startswith("."):
+                        # Mapeamos nombre_archivo -> ruta_absoluta_real
+                        physical_files[p.name] = p.resolve()
+        except Exception as e:
+            print(f"[META_WARNING] Error indexing physical files for self-healing: {e}")
+
         new_cache = {}
+        healed_count = 0
+        records_to_write = []
+        
         try:
             with open(META_LOG, "r", encoding="utf-8") as f:
                 for line in f:
-                    if line.strip():
-                        item = json.loads(line)
-                        item_id = item.get("id")
-                        if not item_id:
-                            item_id = hashlib.md5(item.get("saved_path", "").encode()).hexdigest()
-                            item["id"] = item_id
-                        new_cache[item_id] = item
+                    if not line.strip():
+                        continue
+                    item = json.loads(line)
+                    saved_path_str = item.get("saved_path", "")
+                    saved_path = Path(saved_path_str) if saved_path_str else None
+                    filename = item.get("name")
+
+                    # Verificar si la ruta guardada es inválida o no existe físicamente
+                    if filename and (not saved_path or not saved_path.exists()):
+                        # Buscar si el archivo existe en la ubicación física real actual
+                        if filename in physical_files:
+                            real_path = physical_files[filename]
+                            item["saved_path"] = str(real_path)
+                            if "reported_path" in item:
+                                item["reported_path"] = str(real_path)
+                            healed_count += 1
+                            print(f"[SELF-HEAL] Corregida ruta para {filename} -> {real_path}")
+
+                    item_id = item.get("id")
+                    if not item_id:
+                        item_id = hashlib.md5(item.get("saved_path", "").encode()).hexdigest()
+                        item["id"] = item_id
+                    
+                    new_cache[item_id] = item
+                    records_to_write.append(json.dumps(item) + "\n")
+
+            # 2. Si hubo registros auto-reparados, hacemos backup y reescribimos de forma segura
+            if healed_count > 0:
+                try:
+                    backup_path = META_LOG.with_suffix(".jsonl.bak")
+                    shutil.copy2(META_LOG, backup_path)
+                    print(f"[SELF-HEAL] Creado backup de seguridad en {backup_path}")
+                    
+                    with open(META_LOG, "w", encoding="utf-8") as f:
+                        f.writelines(records_to_write)
+                    print(f"[SELF-HEAL] ¡Se han reparado {healed_count} registros de metadatos automáticamente!")
+                except Exception as save_err:
+                    print(f"[SELF-HEAL_ERROR] Error al guardar metadatos reparados: {save_err}")
+
             self._cache = new_cache
-            print(f"[META] Cache loaded: {len(self._cache)} files indexed in RAM.")
+            print(f"[META] Cache loaded: {len(self._cache)} files indexed in RAM. (Self-heal: {healed_count} repaired)")
         except Exception as e:
             print(f"[META_ERROR] Error loading metadata: {e}")
             
