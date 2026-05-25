@@ -39,7 +39,7 @@
         "expo-share-intent",
         {
           "iosShareExtensionTargetName": "VaultShareExtension",
-          "androidIntentFilters": ["image", "video", "file"]
+          "androidIntentFilters": ["image/*", "video/*", "*/*"]
         }
       ]
     ]
