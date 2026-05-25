@@ -186,11 +186,11 @@ def main():
     
     # Validate storage
     storage_ready, storage_error = is_storage_ready(storage_dir)
-    reduced_mode = not storage_ready
-    
-    if reduced_mode:
+    if not storage_ready:
         print(f"\n[!] STORAGE WARNING: {storage_error}")
-        print("[!] Bot will start in REDUCED MODE.")
+        print("[!] Bot will start normally (Reduced mode disabled by user request).")
+    
+    reduced_mode = False
 
     if args_parsed.mode == "bot":
         print(f"[*] Starting Telegram Bot (Main Thread)...")
