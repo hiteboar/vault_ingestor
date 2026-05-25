@@ -215,6 +215,7 @@ export default function App() {
     if (!previewItem) return;
     
     Alert.alert(
+        'Delete File',
         'Are you sure you want to delete this file permanently?',
         [
             { text: 'Cancel', style: 'cancel' },
