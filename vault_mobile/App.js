@@ -24,6 +24,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import * as api from './api';
 import { AppState } from 'react-native';
+import { useShareIntent } from 'expo-share-intent';
 
 const { width, height } = Dimensions.get('window');
 const COLUMN_COUNT = 3;
@@ -78,6 +79,12 @@ export default function App() {
   const [newFolderModal, setNewFolderModal] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   
+  // Share Intent state
+  const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntent();
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [shareUploadState, setShareUploadState] = useState({ active: false, current: 0, total: 0, percent: 0 });
+  const [selectedShareFolder, setSelectedShareFolder] = useState('root');
+  
   // Date filters for timeline
   const [selectedYear, setSelectedYear] = useState('All');
   const [selectedMonth, setSelectedMonth] = useState('All');
@@ -109,6 +116,21 @@ export default function App() {
       clearInterval(interval);
     };
   }, [connected, view]);
+
+  useEffect(() => {
+    if (hasShareIntent && shareIntent && shareIntent.files && shareIntent.files.length > 0) {
+      if (!connected) {
+        Alert.alert(
+          'Not Connected',
+          'Please link this device to your Vault Storage system first in order to share files.',
+          [{ text: 'OK', onPress: () => resetShareIntent() }]
+        );
+        return;
+      }
+      setSelectedShareFolder(currentFolder === 'root' ? 'root' : currentFolder);
+      setShowShareModal(true);
+    }
+  }, [hasShareIntent, shareIntent, connected]);
 
   const checkConnection = async () => {
     const conn = await api.getConnection();
@@ -309,6 +331,57 @@ export default function App() {
       loadData();
       if (successCount > 0 && successCount < assets.length) {
           alert(`Uploaded ${successCount} of ${assets.length} files successfully.`);
+      }
+  };
+
+  const handleShareUpload = async () => {
+      if (!shareIntent || !shareIntent.files || shareIntent.files.length === 0) return;
+      
+      const assets = shareIntent.files;
+      setShareUploadState({ active: true, current: 0, total: assets.length, percent: 0 });
+      let successCount = 0;
+
+      for (let i = 0; i < assets.length; i++) {
+          const asset = assets[i];
+          const filename = asset.fileName || asset.path.split('/').pop() || `shared_${Date.now()}.bin`;
+          setShareUploadState(prev => ({ ...prev, current: i + 1, percent: 0 }));
+          
+          try {
+              let originalDate = null;
+              try {
+                  const fileInfo = await FileSystem.getInfoAsync(asset.path);
+                  if (fileInfo && fileInfo.modificationTime) {
+                      originalDate = new Date(fileInfo.modificationTime * 1000).toISOString();
+                  }
+              } catch (fsErr) {
+                  // Ignorar errores al consultar metadatos del archivo temporal
+              }
+
+              await api.uploadFile(
+                  asset.path, 
+                  filename, 
+                  asset.type || 'application/octet-stream', 
+                  selectedShareFolder, 
+                  originalDate, 
+                  (pct) => {
+                      setShareUploadState(prev => ({ ...prev, percent: pct }));
+                  }
+              );
+              successCount++;
+          } catch(e) {
+              alert(`Error uploading shared file ${filename}: ${e.message}`);
+          }
+      }
+
+      setShareUploadState({ active: false, current: 0, total: 0, percent: 0 });
+      setShowShareModal(false);
+      resetShareIntent();
+      loadData();
+      
+      if (successCount === assets.length) {
+          Alert.alert("Success", "All shared files uploaded successfully!");
+      } else if (successCount > 0) {
+          Alert.alert("Partial Success", `Uploaded ${successCount} of ${assets.length} files successfully.`);
       }
   };
 
@@ -1164,6 +1237,109 @@ export default function App() {
                                 disabled={!newFolderName.trim()}
                             >
                                 <Text style={styles.buttonText}>Create</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+               </View>
+            </Modal>
+       )}
+
+       {/* Share Intent Modal */}
+       {showShareModal && (
+            <Modal visible={true} transparent={true} animationType="slide" onRequestClose={() => { setShowShareModal(false); resetShareIntent(); }}>
+               <View style={styles.modalBg}>
+                    <View style={[styles.promptCard, { maxWidth: 360, width: '90%', maxHeight: height * 0.8 }]}>
+                        <Text style={styles.promptTitle}>📥 Save Shared Files</Text>
+                        <Text style={styles.promptSub}>Choose a folder destination in your Vault.</Text>
+
+                        {/* File preview and count */}
+                        {shareIntent.files && shareIntent.files.length > 0 && (
+                            <View style={{ backgroundColor: '#1e293b', padding: 12, borderRadius: 8, marginVertical: 15, width: '100%', flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                                {shareIntent.files[0].type?.startsWith('image') ? (
+                                    <Image 
+                                        source={{ uri: shareIntent.files[0].path }} 
+                                        style={{ width: 48, height: 48, borderRadius: 6, backgroundColor: '#0f172a' }}
+                                    />
+                                ) : (
+                                    <View style={{ width: 48, height: 48, borderRadius: 6, backgroundColor: '#0f172a', alignItems: 'center', justifyContent: 'center' }}>
+                                        <MaterialCommunityIcons name="file-document" size={24} color="#94a3b8" />
+                                    </View>
+                                )}
+                                <View style={{ flex: 1 }}>
+                                    <Text style={{ color: '#fff', fontSize: 13, fontWeight: 'bold' }} numberOfLines={1}>
+                                        {shareIntent.files[0].fileName || shareIntent.files[0].path.split('/').pop()}
+                                    </Text>
+                                    <Text style={{ color: '#64748b', fontSize: 11 }}>
+                                        {shareIntent.files.length > 1 ? `And ${shareIntent.files.length - 1} more file(s)` : 'Ready to upload'}
+                                    </Text>
+                                </View>
+                            </View>
+                        )}
+
+                        <Text style={{ color: '#94a3b8', fontSize: 12, fontWeight: 'bold', alignSelf: 'flex-start', marginBottom: 8 }}>Destination Folder:</Text>
+
+                        {/* List folders */}
+                        <View style={{ maxHeight: 220, width: '100%', marginBottom: 20 }}>
+                            <FlatList 
+                                data={['root', ...new Set(items.map(i => i.context && i.context !== 'root' ? i.context : null).filter(f => f !== null))]}
+                                keyExtractor={(f) => f}
+                                style={{ width: '100%' }}
+                                renderItem={({ item: f }) => (
+                                    <TouchableOpacity 
+                                        style={{
+                                            padding: 12,
+                                            backgroundColor: selectedShareFolder === f ? '#1e3a8a' : '#1e293b',
+                                            borderRadius: 8,
+                                            marginBottom: 6,
+                                            flexDirection: 'row',
+                                            alignItems: 'center',
+                                            borderWidth: 1,
+                                            borderColor: selectedShareFolder === f ? '#3b82f6' : '#334155'
+                                        }}
+                                        onPress={() => setSelectedShareFolder(f)}
+                                    >
+                                        <MaterialCommunityIcons 
+                                            name={f === 'root' ? 'calendar-clock' : 'folder-outline'} 
+                                            size={18} 
+                                            color={selectedShareFolder === f ? '#3b82f6' : '#94a3b8'} 
+                                            style={{ marginRight: 10 }}
+                                        />
+                                        <Text style={{ color: '#fff', fontWeight: selectedShareFolder === f ? 'bold' : 'normal', fontSize: 13 }}>
+                                            {f === 'root' ? 'Timeline (Default)' : f}
+                                        </Text>
+                                    </TouchableOpacity>
+                                )}
+                            />
+                        </View>
+
+                        {/* Progress Bar inside modal */}
+                        {shareUploadState.active && (
+                            <View style={{ width: '100%', marginBottom: 15 }}>
+                                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
+                                    <Text style={{ color: '#fff', fontSize: 12 }}>Uploading {shareUploadState.current} of {shareUploadState.total}...</Text>
+                                    <Text style={{ color: '#3b82f6', fontSize: 12, fontWeight: 'bold' }}>{shareUploadState.percent}%</Text>
+                                </View>
+                                <View style={{ height: 4, backgroundColor: '#334155', borderRadius: 2, overflow: 'hidden' }}>
+                                    <View style={{ width: `${shareUploadState.percent}%`, height: '100%', backgroundColor: '#3b82f6' }} />
+                                </View>
+                            </View>
+                        )}
+
+                        {/* Action buttons */}
+                        <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
+                            <TouchableOpacity 
+                                style={[styles.button, { flex: 1, backgroundColor: '#334155' }]} 
+                                onPress={() => { setShowShareModal(false); resetShareIntent(); }}
+                                disabled={shareUploadState.active}
+                            >
+                                <Text style={styles.buttonText}>Cancel</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity 
+                                style={[styles.button, { flex: 1 }]} 
+                                onPress={handleShareUpload}
+                                disabled={shareUploadState.active}
+                            >
+                                <Text style={styles.buttonText}>Save</Text>
                             </TouchableOpacity>
                         </View>
                     </View>

@@ -2,6 +2,7 @@
   "expo": {
     "name": "Vault Mobile",
     "slug": "vault-mobile",
+    "scheme": "vault-mobile",
     "version": "1.0.0",
     "sdkVersion": "54.0.0",
     "orientation": "portrait",
@@ -32,6 +33,15 @@
       "eas": {
         "projectId": "cb16824f-3f5e-4656-b8c9-42dd3a6ab373"
       }
-    }
+    },
+    "plugins": [
+      [
+        "expo-share-intent",
+        {
+          "iosShareExtensionTargetName": "VaultShareExtension",
+          "androidIntentFilters": ["image", "video", "file"]
+        }
+      ]
+    ]
   }
 }

@@ -149,6 +149,13 @@ export const deleteItem = async (itemId) => {
     return resp.data;
 };
 
+export const fetchFolders = async () => {
+    const client = await getClient();
+    if (!client) throw new Error('Not connected');
+    const resp = await client.get('/api/folders');
+    return resp.data;
+};
+
 export const createFolder = async (folderName) => {
     const client = await getClient();
     if (!client) throw new Error('Not connected');
