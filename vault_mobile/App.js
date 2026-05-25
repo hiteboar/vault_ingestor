@@ -350,12 +350,16 @@ export default function App() {
           try {
               let originalDate = null;
               try {
-                  const fileInfo = await FileSystem.getInfoAsync(asset.path);
+                  // On Android, asset.contentUri points to the original system content provider file.
+                  // Querying contentUri via FileSystem.getInfoAsync returns the original modification time,
+                  // whereas asset.path points to the newly created temporary cache file.
+                  const queryPath = asset.contentUri || asset.path;
+                  const fileInfo = await FileSystem.getInfoAsync(queryPath);
                   if (fileInfo && fileInfo.modificationTime) {
                       originalDate = new Date(fileInfo.modificationTime * 1000).toISOString();
                   }
               } catch (fsErr) {
-                  // Ignorar errores al consultar metadatos del archivo temporal
+                  // Ignorar errores al consultar metadatos del archivo temporal o contentUri
               }
 
               await api.uploadFile(
