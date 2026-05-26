@@ -349,12 +349,13 @@ export default function App() {
           
           try {
               let originalDate = null;
+              let fileUri = asset.path;
               try {
                   // On Android, asset.contentUri points to the original system content provider file.
                   // Querying contentUri via FileSystem.getInfoAsync returns the original modification time,
                   // whereas asset.path points to the newly created temporary cache file.
                   const queryPath = asset.contentUri || asset.path;
-                  const fileUri = (queryPath.startsWith('file://') || queryPath.startsWith('content://'))
+                  fileUri = (queryPath.startsWith('file://') || queryPath.startsWith('content://'))
                       ? queryPath
                       : `file://${queryPath}`;
                   const fileInfo = await FileSystem.getInfoAsync(fileUri);
@@ -366,7 +367,7 @@ export default function App() {
               }
 
               await api.uploadFile(
-                  asset.path, 
+                  fileUri, 
                   filename, 
                   asset.type || 'application/octet-stream', 
                   selectedShareFolder, 
