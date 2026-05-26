@@ -17,6 +17,11 @@ import time
 from datetime import datetime, timezone
 from PIL import Image as PILImage, ImageOps
 
+try:
+    import exifread
+except ImportError:
+    exifread = None
+
 from core.auth import AuthManager
 from core.network import get_local_ip
 
@@ -126,6 +131,23 @@ def extract_metadata_timestamp(file_path: Path) -> Optional[str]:
     
     # 1. Try EXIF for images (supporting JPG, JPEG, PNG, WEBP, HEIC, HEIF)
     if ext in {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}:
+        # Try exifread first (highly reliable for HEIC/JPEG and pure Python)
+        if exifread:
+            try:
+                with open(file_path, 'rb') as f:
+                    tags = exifread.process_file(f, details=False)
+                    tag = tags.get('EXIF DateTimeOriginal') or tags.get('Image DateTime') or tags.get('EXIF DateTimeDigitized')
+                    if tag:
+                        try:
+                            date_str = str(tag).strip().replace('\x00', '')
+                            dt = datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
+                            return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+                        except:
+                            pass
+            except:
+                pass
+
+        # Fallback to PIL (Pillow) if exifread is not available or didn't find anything
         try:
             from PIL import Image as PILImage
             from PIL.ExifTags import TAGS
