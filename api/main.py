@@ -119,13 +119,13 @@ def log_audit(action: str, path: Path, device_info: dict):
     except Exception as e:
         print(f"[AUDIT_ERROR] {e}")
 
-def extract_timestamp(file_path: Path) -> str:
-    """Extracts the most accurate date possible from a file and returns it in ISO format."""
+def extract_metadata_timestamp(file_path: Path) -> Optional[str]:
+    """Extracts date/time from EXIF, FFprobe, or Filename. Returns None if none found."""
     ext = file_path.suffix.lower()
     filename = file_path.name
     
-    # 1. Try EXIF for images
-    if ext in {".jpg", ".jpeg", ".png", ".webp"}:
+    # 1. Try EXIF for images (supporting JPG, JPEG, PNG, WEBP, HEIC, HEIF)
+    if ext in {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}:
         try:
             from PIL import Image as PILImage
             from PIL.ExifTags import TAGS
@@ -175,6 +175,14 @@ def extract_timestamp(file_path: Path) -> str:
                 return f"{year}-{month}-{day}T12:00:00Z"
         except:
             pass
+            
+    return None
+
+def extract_timestamp(file_path: Path) -> str:
+    """Extracts the most accurate date possible from a file and returns it in ISO format."""
+    ts = extract_metadata_timestamp(file_path)
+    if ts:
+        return ts
 
     # 4. Fallback to system modification date (in UTC)
     try:
@@ -601,9 +609,10 @@ async def get_item_info(item_id: str, x_device_token: str = Header(...)):
         "timestamp": item_meta.get("timestamp")
     }
     
-    # Always try a fresh extraction to ensure the most accurate date is shown
-    # (This restores the "working" behavior the user mentioned)
-    fresh_ts = extract_timestamp(orig_path)
+    # Always try a fresh extraction of ACTUAL METADATA to ensure the most accurate date is shown
+    # If the file has no embedded EXIF/FFprobe/filename date, we keep the existing timestamp
+    # instead of falling back to the server's file modification time.
+    fresh_ts = extract_metadata_timestamp(orig_path)
     
     # If the fresh extraction is different from what we had in meta, update the log/cache
     if fresh_ts and fresh_ts != item_meta.get("timestamp"):
@@ -627,7 +636,7 @@ async def get_item_info(item_id: str, x_device_token: str = Header(...)):
         except:
             pass
             
-    info["timestamp"] = fresh_ts or item_meta.get("timestamp")
+    info["timestamp"] = item_meta.get("timestamp")
     
     try:
         if ext in {".jpg", ".jpeg", ".png", ".webp"}:
@@ -1040,19 +1049,20 @@ async def upload_file(
             shutil.copyfileobj(file.file, buffer)
             
         # Determine final timestamp
-        # 1. Try to extract from file (EXIF/FFprobe)
-        final_timestamp = extract_timestamp(file_path)
+        # 1. Try to extract authentic metadata from file (EXIF/FFprobe/filename)
+        final_timestamp = extract_metadata_timestamp(file_path)
         
-        # 2. If extraction resulted in a fallback (likely mtime/current time),
-        # then we consider using original_date from mobile.
-        try:
-            mtime_now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            if final_timestamp.startswith(mtime_now) and original_date:
-                # If original_date is older than today, it's likely more accurate than mtime
-                if not original_date.startswith(mtime_now):
-                    final_timestamp = original_date
-        except:
-            pass
+        # 2. If no authentic metadata, prioritize original_date from the client if provided
+        if not final_timestamp and original_date:
+            final_timestamp = original_date
+            
+        # 3. If still no timestamp, fallback to server mtime or now
+        if not final_timestamp:
+            try:
+                mtime = file_path.stat().st_mtime
+                final_timestamp = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            except:
+                final_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         item = {
             "id": secrets.token_hex(8),

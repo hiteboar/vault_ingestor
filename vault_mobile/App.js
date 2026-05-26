@@ -354,7 +354,10 @@ export default function App() {
                   // Querying contentUri via FileSystem.getInfoAsync returns the original modification time,
                   // whereas asset.path points to the newly created temporary cache file.
                   const queryPath = asset.contentUri || asset.path;
-                  const fileInfo = await FileSystem.getInfoAsync(queryPath);
+                  const fileUri = (queryPath.startsWith('file://') || queryPath.startsWith('content://'))
+                      ? queryPath
+                      : `file://${queryPath}`;
+                  const fileInfo = await FileSystem.getInfoAsync(fileUri);
                   if (fileInfo && fileInfo.modificationTime) {
                       originalDate = new Date(fileInfo.modificationTime * 1000).toISOString();
                   }
