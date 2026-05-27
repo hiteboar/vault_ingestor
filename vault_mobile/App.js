@@ -340,11 +340,32 @@ export default function App() {
       
       const assets = shareIntent.files;
       setShareUploadState({ active: true, current: 0, total: assets.length, percent: 0 });
-      let successCount = 0;
-
-      for (let i = 0; i < assets.length; i++) {
+      let successCount = 0;       for (let i = 0; i < assets.length; i++) {
           const asset = assets[i];
-          const filename = asset.fileName || asset.path.split('/').pop() || `shared_${Date.now()}.bin`;
+          const mimeType = asset.mimeType || asset.type || 'application/octet-stream';
+          let filename = asset.fileName || asset.path.split('/').pop() || `shared_${Date.now()}.bin`;
+          
+          // Ensure filename has a valid extension if we know the mimeType
+          if (!filename.includes('.') || filename.endsWith('.tmp') || filename.endsWith('.bin')) {
+              const extMap = {
+                  'image/jpeg': '.jpg',
+                  'image/jpg': '.jpg',
+                  'image/png': '.png',
+                  'image/webp': '.webp',
+                  'image/heic': '.heic',
+                  'image/heif': '.heif',
+                  'video/mp4': '.mp4',
+                  'video/quicktime': '.mov',
+                  'video/x-matroska': '.mkv',
+                  'application/pdf': '.pdf'
+              };
+              const ext = extMap[mimeType.toLowerCase()];
+              if (ext) {
+                  const base = filename.replace(/\.(tmp|bin)$/i, '');
+                  filename = base + ext;
+              }
+          }
+
           setShareUploadState(prev => ({ ...prev, current: i + 1, percent: 0 }));
           
           try {
@@ -369,7 +390,7 @@ export default function App() {
               await api.uploadFile(
                   fileUri, 
                   filename, 
-                  asset.type || 'application/octet-stream', 
+                  mimeType, 
                   selectedShareFolder, 
                   originalDate, 
                   (pct) => {

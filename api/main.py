@@ -124,13 +124,16 @@ def log_audit(action: str, path: Path, device_info: dict):
     except Exception as e:
         print(f"[AUDIT_ERROR] {e}")
 
-def extract_metadata_timestamp(file_path: Path) -> Optional[str]:
+def extract_metadata_timestamp(file_path: Path, content_type: Optional[str] = None) -> Optional[str]:
     """Extracts date/time from EXIF, FFprobe, or Filename. Returns None if none found."""
     ext = file_path.suffix.lower()
     filename = file_path.name
     
+    is_image = (ext in {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}) or (content_type and content_type.startswith("image/"))
+    is_video = (ext in {".mp4", ".mov", ".avi", ".mkv", ".webm"}) or (content_type and content_type.startswith("video/"))
+    
     # 1. Try EXIF for images (supporting JPG, JPEG, PNG, WEBP, HEIC, HEIF)
-    if ext in {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}:
+    if is_image:
         # Try exifread first (highly reliable for HEIC/JPEG and pure Python)
         if exifread:
             try:
@@ -170,7 +173,7 @@ def extract_metadata_timestamp(file_path: Path) -> Optional[str]:
             pass
             
     # 2. Try FFprobe for videos
-    elif ext in {".mp4", ".mov", ".avi", ".mkv", ".webm"}:
+    elif is_video:
         try:
             import subprocess
             cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(file_path)]
@@ -1072,7 +1075,7 @@ async def upload_file(
             
         # Determine final timestamp
         # 1. Try to extract authentic metadata from file (EXIF/FFprobe/filename)
-        final_timestamp = extract_metadata_timestamp(file_path)
+        final_timestamp = extract_metadata_timestamp(file_path, file.content_type)
         
         # 2. If no authentic metadata, prioritize original_date from the client if provided
         if not final_timestamp and original_date:
