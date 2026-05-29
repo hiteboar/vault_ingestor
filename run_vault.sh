@@ -79,7 +79,8 @@ else
 fi
 
 $PYTHON_EXE <<EOF
-import requests
+import urllib.request
+import urllib.error
 import json
 import time
 
@@ -88,22 +89,31 @@ try:
     max_retries = 15
     for i in range(max_retries):
         try:
-            resp = requests.get("http://localhost:8001/api/config", timeout=2)
-            if resp.status_code == 200:
-                config_data = resp.json()
-                remote_enabled = config_data.get("ENABLE_REMOTE_ACCESS", "false").lower() == "true"
-                
-                # Read recovery token if exists
-                recovery_param = ""
-                try:
-                    with open("vault_internal/.recovery_token", "r") as f:
-                        recovery_param = f"?recovery={f.read().strip()}"
-                except:
-                    pass
+            req = urllib.request.Request("http://localhost:8001/api/config")
+            with urllib.request.urlopen(req, timeout=2) as response:
+                if response.status == 200:
+                    config_data = json.loads(response.read().decode('utf-8'))
+                    remote_enabled = config_data.get("ENABLE_REMOTE_ACCESS", "false").lower() == "true"
                     
-                auth_resp = requests.get(f"http://localhost:8001/api/auth/request{recovery_param}", timeout=2)
+                    # Read recovery token if exists
+                    recovery_param = ""
+                    try:
+                        with open("vault_internal/.recovery_token", "r") as f:
+                            recovery_param = "?recovery=" + f.read().strip()
+                    except:
+                        pass
+                        
+                    try:
+                        auth_req = urllib.request.Request("http://localhost:8001/api/auth/request" + recovery_param)
+                        with urllib.request.urlopen(auth_req, timeout=2) as auth_response:
+                            status_code = auth_response.status
+                            auth_body = auth_response.read()
+                    except urllib.error.HTTPError as e:
+                        status_code = e.code
+                        auth_body = e.read()
                 
-                if auth_resp.status_code == 403:
+                    
+                if status_code == 403:
                     print("\n" + "="*50)
                     print("   [!] ADMIN DEVICE ALREADY LINKED")
                     print("="*50)
@@ -116,8 +126,8 @@ try:
                     print("="*50)
                     break
                     
-                elif auth_resp.status_code == 200:
-                    data = auth_resp.json()
+                elif status_code == 200:
+                    data = json.loads(auth_body.decode('utf-8'))
                     
                     # Detect if the URL is remote (not local)
                     is_remote_url = not any(local in data['url'] for local in ["localhost", "127.0.0.1", "192.168.", "10."])
