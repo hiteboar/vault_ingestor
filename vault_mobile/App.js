@@ -312,12 +312,24 @@ export default function App() {
           setUploadState(prev => ({ ...prev, current: i + 1, percent: 0 }));
           
           try {
-              const fileInfo = await FileSystem.getInfoAsync(asset.uri);
-              // Prioritize asset.creationTime (from ImagePicker) then fileInfo.modificationTime
-              const rawTimestamp = asset.creationTime || fileInfo.modificationTime;
-              const originalDate = rawTimestamp 
-                  ? new Date(rawTimestamp * (rawTimestamp > 1e11 ? 1 : 1000)).toISOString()
-                  : null;
+              let originalDate = null;
+              if (asset.exif && asset.exif.DateTimeOriginal) {
+                  const parts = asset.exif.DateTimeOriginal.split(' ');
+                  if (parts.length === 2) {
+                      originalDate = `${parts[0].replace(/:/g, '-')}T${parts[1]}Z`;
+                  }
+              }
+              if (!originalDate && asset.creationTime) {
+                  originalDate = new Date(asset.creationTime * (asset.creationTime > 1e11 ? 1 : 1000)).toISOString();
+              }
+              if (!originalDate) {
+                  const fileInfo = await FileSystem.getInfoAsync(asset.uri);
+                  if (fileInfo && fileInfo.modificationTime) {
+                      if (!asset.uri.includes('/cache/')) {
+                          originalDate = new Date(fileInfo.modificationTime * 1000).toISOString();
+                      }
+                  }
+              }
                   
               await api.uploadFile(asset.uri, filename, asset.mimeType || asset.type || 'application/octet-stream', currentFolder, originalDate, (pct) => {
                   setUploadState(prev => ({ ...prev, percent: pct }));
@@ -381,7 +393,9 @@ export default function App() {
                       : `file://${queryPath}`;
                   const fileInfo = await FileSystem.getInfoAsync(fileUri);
                   if (fileInfo && fileInfo.modificationTime) {
-                      originalDate = new Date(fileInfo.modificationTime * 1000).toISOString();
+                      if (!fileUri.includes('/cache/')) {
+                          originalDate = new Date(fileInfo.modificationTime * 1000).toISOString();
+                      }
                   }
               } catch (fsErr) {
                   // Ignorar errores al consultar metadatos del archivo temporal o contentUri
@@ -427,6 +441,7 @@ export default function App() {
       mediaTypes: ImagePicker.MediaTypeOptions.All,
       allowsMultipleSelection: true,
       quality: 1,
+      exif: true,
     });
     if (!result.canceled && result.assets && result.assets.length > 0) {
       processUploads(result.assets);

@@ -1081,13 +1081,10 @@ async def upload_file(
         if not final_timestamp and original_date:
             final_timestamp = original_date
             
-        # 3. If still no timestamp, fallback to server mtime or now
+        # 3. If still no timestamp, fallback to oldest possible date per user requirement
         if not final_timestamp:
-            try:
-                mtime = file_path.stat().st_mtime
-                final_timestamp = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            except:
-                final_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            final_timestamp = "1970-01-01T00:00:00Z"
+
 
         item = {
             "id": secrets.token_hex(8),
