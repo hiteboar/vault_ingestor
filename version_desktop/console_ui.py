@@ -16,15 +16,16 @@ from api.main import app as fastapi_app
 from app import bootstrap # Import startup logic from app.py
 
 # Basic configuration
-API_PORT = int(os.getenv("API_PORT", "8001"))
-API_URL = f"http://localhost:{API_PORT}"
+API_HOST = os.getenv("API_HOST", "127.0.0.1")
+API_PORT = int(os.getenv("API_PORT", "8081"))
+API_URL = f"http://{API_HOST}:{API_PORT}"
 UI_TITLE = "Vault Ingestor - Management Console"
 
 def run_server():
     """Launches the FastAPI server in a separate thread."""
     # Ensure bootstrap runs before starting uvicorn
     bootstrap()
-    uvicorn.run(fastapi_app, host="0.0.0.0", port=API_PORT)
+    uvicorn.run(fastapi_app, host=API_HOST, port=API_PORT)
 
 class Api:
     """Bridge class between Python and JavaScript."""

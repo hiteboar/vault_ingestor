@@ -133,8 +133,8 @@ if [ -n "$PYTHON_VER" ]; then
 fi
 
 # Robust installation for Bullseye & Bookworm OS versions
-sudo apt-get install -y libopenjp2-7 libtiff5 libtiff6 libjpeg-dev zlib1g-dev python3-dev python3-venv rustc cargo libffi-dev libssl-dev ffmpeg curl 2>/dev/null || \
-sudo apt-get install -y libopenjp2-7 libjpeg-dev zlib1g-dev python3-dev python3-venv rustc cargo libffi-dev libssl-dev ffmpeg curl
+sudo apt-get install -y libopenjp2-7 libtiff5 libtiff6 libjpeg-dev zlib1g-dev python3-dev python3-venv rustc cargo libffi-dev libssl-dev ffmpeg curl libheif-dev 2>/dev/null || \
+sudo apt-get install -y libopenjp2-7 libjpeg-dev zlib1g-dev python3-dev python3-venv rustc cargo libffi-dev libssl-dev ffmpeg curl libheif-dev
 
 # 6. Official Cloudflared Binary Installation (32/64-bit aware)
 if ! command -v cloudflared &> /dev/null; then
