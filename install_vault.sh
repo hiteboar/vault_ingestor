@@ -155,15 +155,15 @@ if [ -d ".venv" ]; then
     rm -rf .venv
 fi
 python3 -m venv .venv
-source .venv/bin/activate
+. .venv/bin/activate 2>/dev/null || source .venv/bin/activate 2>/dev/null
 
 # Cryptography compilation flag compatibility (prevents rust compile errors on Pi)
 export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
 
 echo -e "\n${BLUE}[*] Instalando requerimientos de Python (esto puede tardar unos minutos)...${NC}"
-pip install --upgrade pip
-pip install -r requirements.txt
-pip install pycloudflared
+"$PROJECT_DIR/.venv/bin/pip" install --upgrade pip
+"$PROJECT_DIR/.venv/bin/pip" install -r requirements.txt
+"$PROJECT_DIR/.venv/bin/pip" install pycloudflared
 
 # 8. Setup Auto-Start systemd Services
 echo -e "\n${BLUE}[*] Registrando servicios de inicio automático (systemd)...${NC}"
