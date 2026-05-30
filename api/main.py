@@ -22,6 +22,12 @@ try:
 except ImportError:
     exifread = None
 
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+except ImportError:
+    pass
+
 from core.auth import AuthManager
 from core.network import get_local_ip
 
@@ -124,6 +130,42 @@ def log_audit(action: str, path: Path, device_info: dict):
     except Exception as e:
         print(f"[AUDIT_ERROR] {e}")
 
+def extract_mp4_creation_time(file_path: Path) -> Optional[str]:
+    """Pure Python parser to extract creation time from MP4/MOV atoms (mvhd)."""
+    try:
+        with open(file_path, "rb") as f:
+            data = f.read(1024 * 1024)
+            idx = data.find(b"mvhd")
+            if idx == -1:
+                try:
+                    f.seek(-1024 * 1024, 2)
+                    data2 = f.read(1024 * 1024)
+                    idx = data2.find(b"mvhd")
+                    if idx != -1:
+                        data = data2
+                except:
+                    pass
+            
+            if idx != -1:
+                version = data[idx + 4]
+                import struct
+                if version == 0:
+                    creation_time_secs = struct.unpack(">I", data[idx + 8:idx + 12])[0]
+                elif version == 1:
+                    creation_time_secs = struct.unpack(">Q", data[idx + 8:idx + 16])[0]
+                else:
+                    return None
+                
+                # Apple epoch (seconds since midnight Jan 1, 1904) to Unix epoch (Jan 1, 1970)
+                epoch_diff = 2082844800
+                utc_timestamp = creation_time_secs - epoch_diff
+                if 0 < utc_timestamp < 4102444800: # reasonable range (1970 to 2100)
+                    dt = datetime.fromtimestamp(utc_timestamp, tz=timezone.utc)
+                    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception as e:
+        print(f"[MP4_PARSER_ERROR] {e}")
+    return None
+
 def extract_metadata_timestamp(file_path: Path, content_type: Optional[str] = None) -> Optional[str]:
     """Extracts date/time from EXIF, FFprobe, or Filename. Returns None if none found."""
     ext = file_path.suffix.lower()
@@ -187,6 +229,12 @@ def extract_metadata_timestamp(file_path: Path, content_type: Optional[str] = No
                     return creation_time
         except:
             pass
+            
+        # Pure Python fallback for MP4/MOV if ffprobe is not installed or fails
+        if ext in {".mp4", ".mov"}:
+            ts = extract_mp4_creation_time(file_path)
+            if ts:
+                return ts
             
     # 3. Try to extract from filename (Pattern: YYYYMMDD or YYYY-MM-DD)
     # Common on mobiles: IMG_20230515_... or VID_20230515_...

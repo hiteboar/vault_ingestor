@@ -16,3 +16,4 @@ pycloudflared==0.3.0
 python-telegram-bot==21.6
 google-generativeai==0.8.3
 exifread==3.0.0
+pillow-heif>=0.16.0
