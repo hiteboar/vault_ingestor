@@ -28,7 +28,7 @@ if [ -f ".env" ]; then
     echo -e " 2) ${RED}Reconfiguración completa${NC} (Vuelve a preguntar las opciones y sobrescribe tu .env actual)"
     echo ""
     read -p "Elige una opción (1/2) [Por defecto: 1]: " env_option
-    if [[ "$env_option" == "2" ]]; then
+    if [ "$env_option" = "2" ]; then
         MODE="install"
     else
         MODE="repair"
@@ -41,14 +41,14 @@ sudo systemctl stop vault_api vault_bot 2>/dev/null
 pkill -f "python.*app.py" 2>/dev/null
 
 # 3. If in install mode, collect new configuration variables
-if [ "$MODE" == "install" ]; then
+if [ "$MODE" = "install" ]; then
     echo -e "\n${YELLOW}[!] ANTES DE CONTINUAR, NECESITARÁS:${NC}"
     echo -e " 1. La ruta donde deseas almacenar tus fotos y vídeos."
     echo -e "    (Ejemplo: /mnt/vault_storage o ./vault_storage)"
     echo -e " 2. (Opcional) Un token de Cloudflare si deseas acceso persistente global."
     echo ""
     read -p "¿Deseas continuar con la instalación? (y/n): " confirm
-    if [[ $confirm != "y" && $confirm != "Y" ]]; then
+    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
         echo -e "${RED}[!] Instalación cancelada.${NC}"
         exit 1
     fi
@@ -60,14 +60,14 @@ if [ "$MODE" == "install" ]; then
     # STORAGE_DIR
     echo -e "\n${YELLOW}¿Dónde deseas almacenar tus archivos?${NC}"
     read -p "[Por defecto: ./vault_storage]: " storage_dir
-    if [[ -z "$storage_dir" ]]; then
+    if [ -z "$storage_dir" ]; then
         storage_dir="./vault_storage"
     fi
 
     # ENABLE_REMOTE_ACCESS
     echo -e "\n${YELLOW}¿Deseas habilitar el acceso remoto seguro (fuera de casa)?${NC}"
     read -p "(y/n) [Por defecto: y]: " remote_confirm
-    if [[ -z "$remote_confirm" || $remote_confirm == "y" || $remote_confirm == "Y" ]]; then
+    if [ -z "$remote_confirm" ] || [ "$remote_confirm" = "y" ] || [ "$remote_confirm" = "Y" ]; then
         enable_remote="true"
         echo -e "\n${YELLOW}¿Tienes un token persistente de Cloudflare?${NC}"
         echo -e "Si lo dejas en blanco, se utilizará TryCloudflare (URL temporal aleatoria)."
@@ -139,7 +139,7 @@ sudo apt-get install -y libopenjp2-7 libjpeg-dev zlib1g-dev python3-dev python3-
 # 6. Official Cloudflared Binary Installation (32/64-bit aware)
 if ! command -v cloudflared &> /dev/null; then
     echo -e "\n${BLUE}[*] Descargando e instalando Cloudflared oficial para tu arquitectura...${NC}"
-    if [[ "$ARCH" == "aarch64" ]]; then
+    if [ "$ARCH" = "aarch64" ]; then
         CF_DEB="cloudflared-linux-arm64.deb"
     else
         CF_DEB="cloudflared-linux-armhf.deb"
