@@ -421,8 +421,13 @@ export default function App() {
           try {
               let originalDate = null;
               
+              // 0. Use the native contentDate resolved via ContentResolver if available
+              if (asset.contentDate) {
+                  originalDate = asset.contentDate;
+              }
+              
               // 1. Try to get the original modification time from the content provider URI
-              if (asset.contentUri) {
+              if (!originalDate && asset.contentUri) {
                   try {
                       const fileInfo = await FileSystem.getInfoAsync(asset.contentUri);
                       if (fileInfo && fileInfo.modificationTime) {

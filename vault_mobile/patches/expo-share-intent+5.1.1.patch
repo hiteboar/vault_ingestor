@@ -1,0 +1,62 @@
+diff --git a/node_modules/expo-share-intent/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt b/node_modules/expo-share-intent/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
+index 0153c89..03ef079 100644
+--- a/node_modules/expo-share-intent/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
++++ b/node_modules/expo-share-intent/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
+@@ -70,6 +70,35 @@ class ExpoShareIntentModule : Module() {
+             queryResult.moveToFirst()
+             val fileName = queryResult.getString(queryResult.getColumnIndex(OpenableColumns.DISPLAY_NAME))
+             val fileSize = queryResult.getString(queryResult.getColumnIndex(OpenableColumns.SIZE))
++            
++            var contentDate: String? = null
++            try {
++                val dateColumns = arrayOf("datetaken", "date_modified", "date_added")
++                for (col in dateColumns) {
++                    val idx = queryResult.getColumnIndex(col)
++                    if (idx != -1) {
++                        val valStr = queryResult.getString(idx)
++                        if (!valStr.isNullOrEmpty() && valStr != "0") {
++                            var timeMs = valStr.toLongOrNull() ?: 0L
++                            if (timeMs > 0L) {
++                                if (col == "date_modified" || col == "date_added") {
++                                    if (timeMs < 1000000000000L) {
++                                        timeMs *= 1000L
++                                    }
++                                }
++                                val date = java.util.Date(timeMs)
++                                val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
++                                sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
++                                contentDate = sdf.format(date)
++                                break
++                            }
++                        }
++                    }
++                }
++            } catch (e: Exception) {
++                // Ignore any error in date parsing to prevent crash
++            }
++            
+             queryResult.close()
+ 
+             val mimeType = resolver.getType(uri)!!
+@@ -107,7 +136,8 @@ class ExpoShareIntentModule : Module() {
+                     "mimeType" to mimeType,
+                     "width" to mediaWidth,
+                     "height" to mediaHeight,
+-                    "duration" to mediaDuration
++                    "duration" to mediaDuration,
++                    "contentDate" to contentDate
+             )
+         }
+ 
+diff --git a/node_modules/expo-share-intent/build/utils.js b/node_modules/expo-share-intent/build/utils.js
+index 3d343c6..952fe8e 100644
+--- a/node_modules/expo-share-intent/build/utils.js
++++ b/node_modules/expo-share-intent/build/utils.js
+@@ -103,6 +103,7 @@ export const parseShareIntent = (value, options) => {
+                                 null,
+                             mimeType: file.mimeType || null,
+                             fileName: file.fileName || null,
++                            contentDate: file.contentDate || null,
+                             width: file.width ? Number(file.width) : null,
+                             height: file.height ? Number(file.height) : null,
+                             size: file.fileSize ? Number(file.fileSize) : null,
