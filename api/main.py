@@ -982,12 +982,37 @@ async def get_thumbnail(
             if thumb_path_jpg.exists(): return FileResponse(thumb_path_jpg)
                 
             import subprocess
-            img_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+            img_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif"}
             vid_exts = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
             ext = orig_path.suffix.lower()
             
+            is_img = ext in img_exts
+            is_vid = ext in vid_exts
+            
+            # Fallback for unrecognized or missing extensions (e.g. from Android uploads)
+            if not is_img and not is_vid:
+                # 1. Try opening as a PIL image
+                try:
+                    with PILImage.open(orig_path) as test_img:
+                        is_img = True
+                except Exception:
+                    pass
+                
+                # 2. If it's not a valid image, try to run ffmpeg to see if it can extract a frame
+                if not is_img:
+                    tmp_test = CACHE_DIR / f"{item_id}.test.jpg"
+                    try:
+                        cmd = ["ffmpeg", "-y", "-i", str(orig_path), "-ss", "00:00:01", "-vframes", "1", "-q:v", "4", str(tmp_test)]
+                        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                        if tmp_test.exists():
+                            is_vid = True
+                            tmp_test.unlink()
+                    except Exception:
+                        if tmp_test.exists():
+                            tmp_test.unlink()
+            
             try:
-                if ext in img_exts:
+                if is_img:
                     with PILImage.open(orig_path) as img:
                         img = ImageOps.exif_transpose(img)
                         if img.mode in ("RGBA", "P"): img = img.convert("RGB")
@@ -1000,7 +1025,7 @@ async def get_thumbnail(
                             img.save(thumb_path_jpg, "JPEG", quality=75)
                             return FileResponse(thumb_path_jpg)
                             
-                elif ext in vid_exts:
+                elif is_vid:
                     tmp_jpg = CACHE_DIR / f"{item_id}.tmp.jpg"
                     cmd = ["ffmpeg", "-y", "-i", str(orig_path), "-ss", "00:00:01", "-vframes", "1", "-q:v", "4", str(tmp_jpg)]
                     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)

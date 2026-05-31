@@ -171,7 +171,8 @@ export default function App() {
       if (e.response?.status === 401) {
         handleLogout();
       } else {
-        setError('Connection error or token revoked.');
+        setError('Conexión perdida con el servidor.');
+        setConnected(false);
       }
     } finally {
       if (showLoading) setLoading(false);
@@ -308,7 +309,30 @@ export default function App() {
       
       for (let i = 0; i < assets.length; i++) {
           const asset = assets[i];
-          const filename = asset.name || asset.fileName || asset.uri.split('/').pop() || 'upload.bin';
+          const mimeType = asset.mimeType || asset.type || 'application/octet-stream';
+          let filename = asset.name || asset.fileName || asset.uri.split('/').pop() || 'upload.bin';
+          
+          // Ensure filename has a valid extension if we know the mimeType
+          if (!filename.includes('.') || filename.endsWith('.tmp') || filename.endsWith('.bin')) {
+              const extMap = {
+                  'image/jpeg': '.jpg',
+                  'image/jpg': '.jpg',
+                  'image/png': '.png',
+                  'image/webp': '.webp',
+                  'image/heic': '.heic',
+                  'image/heif': '.heif',
+                  'video/mp4': '.mp4',
+                  'video/quicktime': '.mov',
+                  'video/x-matroska': '.mkv',
+                  'application/pdf': '.pdf'
+              };
+              const ext = extMap[mimeType.toLowerCase()];
+              if (ext) {
+                  const base = filename.replace(/\.(tmp|bin)$/i, '');
+                  filename = base + ext;
+              }
+          }
+
           setUploadState(prev => ({ ...prev, current: i + 1, percent: 0 }));
           
           try {
@@ -331,7 +355,7 @@ export default function App() {
                   }
               }
                   
-              await api.uploadFile(asset.uri, filename, asset.mimeType || asset.type || 'application/octet-stream', currentFolder, originalDate, (pct) => {
+              await api.uploadFile(asset.uri, filename, mimeType, currentFolder, originalDate, (pct) => {
                   setUploadState(prev => ({ ...prev, percent: pct }));
               });
               successCount++;
