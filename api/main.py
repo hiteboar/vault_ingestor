@@ -174,6 +174,27 @@ def extract_metadata_timestamp(file_path: Path, content_type: Optional[str] = No
     is_image = (ext in {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}) or (content_type and content_type.startswith("image/"))
     is_video = (ext in {".mp4", ".mov", ".avi", ".mkv", ".webm"}) or (content_type and content_type.startswith("video/"))
     
+    # Structural fallback if unrecognized or generic extension/mimetype (e.g. from Android share intents)
+    if not is_image and not is_video:
+        try:
+            from PIL import Image as PILImage
+            with PILImage.open(file_path) as img:
+                is_image = True
+        except:
+            pass
+            
+        if not is_image:
+            try:
+                import subprocess
+                cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(file_path)]
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode == 0:
+                    meta = json.loads(result.stdout)
+                    if "format" in meta:
+                        is_video = True
+            except:
+                pass
+    
     # 1. Try EXIF for images (supporting JPG, JPEG, PNG, WEBP, HEIC, HEIF)
     if is_image:
         # Try exifread first (highly reliable for HEIC/JPEG and pure Python)

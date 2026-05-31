@@ -326,7 +326,14 @@ export default function App() {
                   'video/x-matroska': '.mkv',
                   'application/pdf': '.pdf'
               };
-              const ext = extMap[mimeType.toLowerCase()];
+              let ext = extMap[mimeType.toLowerCase()];
+              if (!ext) {
+                  if (mimeType.toLowerCase().startsWith('image/')) {
+                      ext = '.jpg';
+                  } else if (mimeType.toLowerCase().startsWith('video/')) {
+                      ext = '.mp4';
+                  }
+              }
               if (ext) {
                   const base = filename.replace(/\.(tmp|bin)$/i, '');
                   filename = base + ext;
@@ -395,7 +402,14 @@ export default function App() {
                   'video/x-matroska': '.mkv',
                   'application/pdf': '.pdf'
               };
-              const ext = extMap[mimeType.toLowerCase()];
+              let ext = extMap[mimeType.toLowerCase()];
+              if (!ext) {
+                  if (mimeType.toLowerCase().startsWith('image/')) {
+                      ext = '.jpg';
+                  } else if (mimeType.toLowerCase().startsWith('video/')) {
+                      ext = '.mp4';
+                  }
+              }
               if (ext) {
                   const base = filename.replace(/\.(tmp|bin)$/i, '');
                   filename = base + ext;
