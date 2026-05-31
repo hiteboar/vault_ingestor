@@ -354,12 +354,12 @@ export default function App() {
                   originalDate = new Date(asset.creationTime * (asset.creationTime > 1e11 ? 1 : 1000)).toISOString();
               }
               if (!originalDate) {
-                  const fileInfo = await FileSystem.getInfoAsync(asset.uri);
-                  if (fileInfo && fileInfo.modificationTime) {
-                      if (!asset.uri.includes('/cache/')) {
+                  try {
+                      const fileInfo = await FileSystem.getInfoAsync(asset.uri);
+                      if (fileInfo && fileInfo.modificationTime) {
                           originalDate = new Date(fileInfo.modificationTime * 1000).toISOString();
                       }
-                  }
+                  } catch (err) {}
               }
                   
               await api.uploadFile(asset.uri, filename, mimeType, currentFolder, originalDate, (pct) => {
@@ -420,27 +420,36 @@ export default function App() {
           
           try {
               let originalDate = null;
-              let fileUri = asset.path;
-              try {
-                  // On Android, asset.contentUri points to the original system content provider file.
-                  // Querying contentUri via FileSystem.getInfoAsync returns the original modification time,
-                  // whereas asset.path points to the newly created temporary cache file.
-                  const queryPath = asset.contentUri || asset.path;
-                  fileUri = (queryPath.startsWith('file://') || queryPath.startsWith('content://'))
-                      ? queryPath
-                      : `file://${queryPath}`;
-                  const fileInfo = await FileSystem.getInfoAsync(fileUri);
-                  if (fileInfo && fileInfo.modificationTime) {
-                      if (!fileUri.includes('/cache/')) {
+              
+              // 1. Try to get the original modification time from the content provider URI
+              if (asset.contentUri) {
+                  try {
+                      const fileInfo = await FileSystem.getInfoAsync(asset.contentUri);
+                      if (fileInfo && fileInfo.modificationTime) {
                           originalDate = new Date(fileInfo.modificationTime * 1000).toISOString();
                       }
+                  } catch (err) {
+                      // Ignore errors reading contentUri
                   }
-              } catch (fsErr) {
-                  // Ignorar errores al consultar metadatos del archivo temporal o contentUri
               }
 
+              // 2. If we couldn't get the date from contentUri, fall back to the cache file's modification time.
+              // This is better than passing null (which would default to 1970 on the backend if EXIF is missing).
+              if (!originalDate && asset.path) {
+                  try {
+                      const fallbackPath = asset.path.startsWith('file://') ? asset.path : `file://${asset.path}`;
+                      const fileInfo = await FileSystem.getInfoAsync(fallbackPath);
+                      if (fileInfo && fileInfo.modificationTime) {
+                          originalDate = new Date(fileInfo.modificationTime * 1000).toISOString();
+                      }
+                  } catch (err) {}
+              }
+              
+              // ALWAYS upload the cached file (asset.path) to prevent permission/read errors with FormData
+              const fileUriToUpload = asset.path.startsWith('file://') ? asset.path : `file://${asset.path}`;
+
               await api.uploadFile(
-                  fileUri, 
+                  fileUriToUpload, 
                   filename, 
                   mimeType, 
                   selectedShareFolder, 
