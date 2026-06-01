@@ -733,6 +733,7 @@ async def get_item_info(item_id: str, x_device_token: str = Header(...)):
     info["timestamp"] = item_meta.get("timestamp")
     
     try:
+        ext = orig_path.suffix.lower()
         if ext in {".jpg", ".jpeg", ".png", ".webp"}:
             from PIL import Image as PILImage
             from PIL.ExifTags import TAGS, GPSTAGS
