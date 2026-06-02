@@ -153,6 +153,7 @@ class Api:
 
     def download_url_to_file(self, url, filename, is_post=False, post_data_str=None):
         """Downloads a URL using requests and prompts save file dialog (works for local/remote, GET/POST)."""
+        print(f"[DEBUG] download_url_to_file called: url={url}, filename={filename}, is_post={is_post}, post_data_str={post_data_str}")
         if not webview.windows:
             return {"success": False, "message": "No active window"}
             
@@ -177,19 +178,27 @@ class Api:
                 "x-device-token": settings["token"]
             }
             
-            # Prepend base URL if relative path is passed
+            # Prepend base URL robustly to prevent double slashes (which cause method-dropping redirects)
             full_url = url
-            if url.startswith("/"):
-                full_url = f"{settings['url']}{url}"
-            elif not url.startswith("http"):
-                full_url = f"{settings['url']}/{url}"
+            if not url.startswith("http"):
+                base_url = settings['url'].rstrip('/')
+                rel_path = url.lstrip('/')
+                full_url = f"{base_url}/{rel_path}"
                 
-            if is_post:
+            is_post_bool = False
+            if is_post in (True, 'true', 'True', 1, '1'):
+                is_post_bool = True
+                
+            print(f"[DEBUG] Requesting URL: {full_url} (method={'POST' if is_post_bool else 'GET'})")
+                
+            if is_post_bool:
                 headers["Content-Type"] = "application/json"
                 post_data = json.loads(post_data_str) if post_data_str else {}
                 res = requests.post(full_url, headers=headers, json=post_data, stream=True, timeout=120)
             else:
                 res = requests.get(full_url, headers=headers, stream=True, timeout=120)
+                
+            print(f"[DEBUG] Response status: {res.status_code}, redirect history: {res.history}")
                 
             if res.status_code != 200:
                 try:
