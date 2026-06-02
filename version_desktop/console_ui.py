@@ -151,6 +151,62 @@ class Api:
                     return True
         return False
 
+    def download_url_to_file(self, url, filename, is_post=False, post_data_str=None):
+        """Downloads a URL using requests and prompts save file dialog (works for local/remote, GET/POST)."""
+        if not webview.windows:
+            return {"success": False, "message": "No active window"}
+            
+        window = webview.windows[0]
+        save_path = window.create_file_dialog(
+            webview.SAVE_DIALOG,
+            directory="",
+            save_filename=filename
+        )
+        
+        if not save_path:
+            return {"success": False, "message": "Cancelled"}
+            
+        if isinstance(save_path, list):
+            if not save_path:
+                return {"success": False, "message": "Cancelled"}
+            save_path = save_path[0]
+            
+        try:
+            settings = load_client_settings()
+            headers = {
+                "x-device-token": settings["token"]
+            }
+            
+            # Prepend base URL if relative path is passed
+            full_url = url
+            if url.startswith("/"):
+                full_url = f"{settings['url']}{url}"
+            elif not url.startswith("http"):
+                full_url = f"{settings['url']}/{url}"
+                
+            if is_post:
+                headers["Content-Type"] = "application/json"
+                post_data = json.loads(post_data_str) if post_data_str else {}
+                res = requests.post(full_url, headers=headers, json=post_data, stream=True, timeout=120)
+            else:
+                res = requests.get(full_url, headers=headers, stream=True, timeout=120)
+                
+            if res.status_code != 200:
+                try:
+                    err_msg = res.text[:200]
+                except:
+                    err_msg = "Unknown error"
+                return {"success": False, "message": f"Server error ({res.status_code}): {err_msg}"}
+                
+            with open(save_path, 'wb') as f:
+                for chunk in res.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        
+            return {"success": True, "path": save_path}
+        except Exception as e:
+            return {"success": False, "message": str(e)}
+
     def select_and_upload_files(self, folder):
         """Launches the OS native file chooser and uploads in background."""
         if not webview.windows:
@@ -607,6 +663,24 @@ HTML_CONTENT = """
                 </div>
             </div>
 
+            <!-- Batch Action Bar (Top) -->
+            <div id="batch-action-bar" style="display: none;" class="flex items-center justify-between p-4 bg-slate-900/80 backdrop-blur-md border border-blue-500/20 rounded-2xl mb-4 transition-all duration-300">
+                <div class="flex items-center gap-3">
+                    <span id="batch-count-txt" class="text-sm font-bold text-white">0 files selected</span>
+                    <span class="text-xs text-slate-400">| Perform batch operations</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="downloadSelected()" class="inline-flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold transition-all">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                        Download Selected
+                    </button>
+                    <button id="btn-batch-delete" onclick="deleteSelected()" class="inline-flex items-center gap-1.5 px-3 py-2 bg-rose-600/10 hover:bg-rose-600 text-rose-500 hover:text-white rounded-xl text-xs font-semibold transition-all border border-rose-500/20">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                        Delete Selected
+                    </button>
+                </div>
+            </div>
+
             <!-- Grid Gallery -->
             <div class="flex-1 overflow-y-auto pr-2 custom-scrollbar min-h-[300px]">
                 <div id="gallery-grid" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
@@ -712,23 +786,6 @@ HTML_CONTENT = """
                         <button type="submit" id="remote-btn" class="bg-blue-600 hover:bg-blue-500 text-white text-sm px-8 py-3 rounded-xl font-semibold transition-colors shadow-lg shadow-blue-500/20">Link Server</button>
                     </div>
                 </form>
-        </div>
-
-        <!-- Floating Batch Action Bar -->
-        <div id="batch-action-bar" style="display: none;" class="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 glass rounded-2xl px-6 py-3.5 flex items-center gap-6 shadow-xl shadow-blue-500/5 border border-blue-500/20 max-w-lg transition-all duration-300">
-            <div class="flex flex-col">
-                <span id="batch-count-txt" class="text-sm font-bold text-white">0 files selected</span>
-                <span class="text-[10px] text-slate-400">Perform batch operations</span>
-            </div>
-            <div class="flex items-center gap-2">
-                <button onclick="downloadSelected()" class="inline-flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold transition-all">
-                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-                    Download ZIP
-                </button>
-                <button id="btn-batch-delete" onclick="deleteSelected()" class="inline-flex items-center gap-1.5 px-3 py-2 bg-rose-600/10 hover:bg-rose-600 text-rose-500 hover:text-white rounded-xl text-xs font-semibold transition-all border border-rose-500/20">
-                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                    Delete Selected
-                </button>
             </div>
         </div>
 
@@ -793,10 +850,10 @@ HTML_CONTENT = """
                         Open Locally on PC
                     </button>
                     
-                    <a id="btn-lightbox-download" href="" download class="w-full bg-slate-900 border border-white/10 hover:border-white/20 text-slate-300 hover:text-white font-semibold text-xs py-2.5 rounded-xl transition-all flex items-center justify-center gap-1.5">
+                    <button id="btn-lightbox-download" onclick="downloadLightboxAsset()" class="w-full bg-slate-900 border border-white/10 hover:border-white/20 text-slate-300 hover:text-white font-semibold text-xs py-2.5 rounded-xl transition-all flex items-center justify-center gap-1.5">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
                         Download File
-                    </a>
+                    </button>
 
                     <button id="btn-lightbox-delete" onclick="triggerDeleteAsset()" class="w-full bg-rose-600/10 hover:bg-rose-600 text-rose-500 hover:text-white font-semibold text-xs py-2.5 rounded-xl transition-all flex items-center justify-center gap-1.5">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
@@ -818,36 +875,28 @@ HTML_CONTENT = """
 
         async function downloadFileFromUrl(url, filename, isPost = false, bodyData = null) {
             try {
-                const options = {
-                    method: isPost ? 'POST' : 'GET',
-                    headers: {
-                        'x-device-token': activeConnection.token
-                    }
-                };
-                if (isPost && bodyData) {
-                    options.headers['Content-Type'] = 'application/json';
-                    options.body = JSON.stringify(bodyData);
+                let relativeUrl = url;
+                if (url.startsWith(activeConnection.url)) {
+                    relativeUrl = url.substring(activeConnection.url.length);
                 }
                 
-                const response = await fetch(url, options);
-                if (!response.ok) {
-                    const errText = await response.text();
-                    alert("Download failed: " + errText);
-                    return;
+                const postDataStr = bodyData ? JSON.stringify(bodyData) : null;
+                const res = await window.pywebview.api.download_url_to_file(relativeUrl, filename, isPost, postDataStr);
+                if (res.success) {
+                    // Downloaded successfully
+                } else if (res.message !== "Cancelled") {
+                    alert("Download failed: " + res.message);
                 }
-                
-                const blob = await response.blob();
-                const blobUrl = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = blobUrl;
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                window.URL.revokeObjectURL(blobUrl);
             } catch (e) {
                 alert("Error downloading file: " + e.message);
             }
+        }
+
+        async function downloadLightboxAsset() {
+            if (!activePreviewItem) return;
+            const item = activePreviewItem;
+            const itemName = item.name || item.suggested_filename || (item.saved_path ? item.saved_path.split('/').pop().split(String.fromCharCode(92)).pop() : 'unnamed');
+            await downloadFileFromUrl(`/api/media/file/${item.web_path}`, itemName, false);
         }
 
         function toggleSelectMode() {
@@ -987,7 +1036,7 @@ HTML_CONTENT = """
         async function deleteSelected() {
             if (selectedItemIds.size === 0) return;
             
-            if (confirm(`Are you sure you want to permanently delete the ${selectedItemIds.size} selected items?`)) {
+            if (confirm(`¿Estás seguro de que deseas eliminar permanentemente los ${selectedItemIds.size} elementos seleccionados?`)) {
                 try {
                     const ids = Array.from(selectedItemIds);
                     const res = await fetch(`${activeConnection.url}/api/items/batch-delete`, {
@@ -1397,7 +1446,6 @@ HTML_CONTENT = """
             
             // Download button configuration
             const dlBtn = document.getElementById('btn-lightbox-download');
-            dlBtn.href = `${activeConnection.url}/api/media/file/${item.web_path}?token=${activeConnection.token}`;
             
             // Delete button authorization
             const delBtn = document.getElementById('btn-lightbox-delete');
