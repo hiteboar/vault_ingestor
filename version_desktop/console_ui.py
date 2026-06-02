@@ -334,10 +334,11 @@ HTML_CONTENT = """
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Outfit', sans-serif; background: #0b0f19; color: #f8fafc; overflow: hidden; }
+        body { font-family: 'Outfit', sans-serif; background: #0b0f19; color: #f8fafc; overflow: hidden; display: flex !important; }
         .glass { background: rgba(17, 24, 39, 0.7); backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.06); }
-        .sidebar { width: 280px; height: 100vh; border-right: 1px solid rgba(255,255,255,0.05); }
-        .main-content { height: 100vh; overflow-y: auto; }
+        .sidebar { width: 280px; height: 100vh; border-right: 1px solid rgba(255,255,255,0.05); display: flex !important; flex-direction: column !important; justify-content: space-between !important; }
+        .main-content { height: 100vh; overflow-y: auto; display: flex !important; flex-direction: column !important; }
+        .hidden { display: none; }
         .radial-bg { background: radial-gradient(circle at 50% 50%, #111827 0%, #070a13 100%); }
         .nav-btn { cursor: pointer; transition: all 0.2s ease-in-out; }
         .nav-active { background: rgba(59, 130, 246, 0.12); color: #60a5fa; font-weight: 600; border-left: 3px solid #3b82f6; }
@@ -566,7 +567,22 @@ HTML_CONTENT = """
                 </div>
                 
                 <div class="flex items-center gap-3">
-                    <select id="select-folder" onchange="loadGalleryData()" class="bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-blue-500">
+                    <button id="btn-download-folder" onclick="downloadFolder()" style="display: none;" class="inline-flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold transition-all shadow-md shadow-blue-500/10">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                        Download Folder
+                    </button>
+
+                    <button id="btn-delete-folder" onclick="deleteFolder()" style="display: none;" class="inline-flex items-center gap-1.5 px-3 py-2 bg-rose-600/10 hover:bg-rose-600 text-rose-500 hover:text-white rounded-xl text-xs font-semibold transition-all border border-rose-500/20">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                        Delete Folder
+                    </button>
+
+                    <button id="btn-toggle-select" onclick="toggleSelectMode()" class="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-900 border border-white/10 rounded-xl text-xs text-slate-300 hover:text-white transition-all">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+                        Select
+                    </button>
+
+                    <select id="select-folder" onchange="onFolderChanged()" class="bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-blue-500">
                         <option value="root">Timeline (All folders)</option>
                     </select>
 
@@ -696,6 +712,23 @@ HTML_CONTENT = """
                         <button type="submit" id="remote-btn" class="bg-blue-600 hover:bg-blue-500 text-white text-sm px-8 py-3 rounded-xl font-semibold transition-colors shadow-lg shadow-blue-500/20">Link Server</button>
                     </div>
                 </form>
+        </div>
+
+        <!-- Floating Batch Action Bar -->
+        <div id="batch-action-bar" style="display: none;" class="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 glass rounded-2xl px-6 py-3.5 flex items-center gap-6 shadow-xl shadow-blue-500/5 border border-blue-500/20 max-w-lg transition-all duration-300">
+            <div class="flex flex-col">
+                <span id="batch-count-txt" class="text-sm font-bold text-white">0 files selected</span>
+                <span class="text-[10px] text-slate-400">Perform batch operations</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <button onclick="downloadSelected()" class="inline-flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold transition-all">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                    Download ZIP
+                </button>
+                <button id="btn-batch-delete" onclick="deleteSelected()" class="inline-flex items-center gap-1.5 px-3 py-2 bg-rose-600/10 hover:bg-rose-600 text-rose-500 hover:text-white rounded-xl text-xs font-semibold transition-all border border-rose-500/20">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                    Delete Selected
+                </button>
             </div>
         </div>
 
@@ -780,6 +813,203 @@ HTML_CONTENT = """
         let activeGalleryItems = [];
         let activePreviewItem = null;
         let activeTimelineFilter = 'All';
+        let selectModeActive = false;
+        let selectedItemIds = new Set();
+
+        async function downloadFileFromUrl(url, filename, isPost = false, bodyData = null) {
+            try {
+                const options = {
+                    method: isPost ? 'POST' : 'GET',
+                    headers: {
+                        'x-device-token': activeConnection.token
+                    }
+                };
+                if (isPost && bodyData) {
+                    options.headers['Content-Type'] = 'application/json';
+                    options.body = JSON.stringify(bodyData);
+                }
+                
+                const response = await fetch(url, options);
+                if (!response.ok) {
+                    const errText = await response.text();
+                    alert("Download failed: " + errText);
+                    return;
+                }
+                
+                const blob = await response.blob();
+                const blobUrl = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = blobUrl;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(blobUrl);
+            } catch (e) {
+                alert("Error downloading file: " + e.message);
+            }
+        }
+
+        function toggleSelectMode() {
+            selectModeActive = !selectModeActive;
+            selectedItemIds.clear();
+            const btn = document.getElementById('btn-toggle-select');
+            if (selectModeActive) {
+                btn.innerHTML = `
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                    Cancel
+                `;
+                btn.className = "inline-flex items-center gap-1.5 px-3 py-2 bg-blue-600/20 border border-blue-500/40 rounded-xl text-xs text-blue-400 font-semibold transition-all";
+            } else {
+                btn.innerHTML = `
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+                    Select
+                `;
+                btn.className = "inline-flex items-center gap-1.5 px-3 py-2 bg-slate-900 border border-white/10 rounded-xl text-xs text-slate-300 hover:text-white transition-all";
+            }
+            updateBatchActionBar();
+            renderFilteredGallery();
+        }
+
+        function toggleItemSelection(itemId) {
+            if (selectedItemIds.has(itemId)) {
+                selectedItemIds.delete(itemId);
+            } else {
+                selectedItemIds.add(itemId);
+            }
+            
+            const checkbox = document.getElementById(`chk-${itemId}`);
+            const card = document.getElementById(`card-${itemId}`);
+            if (checkbox && card) {
+                checkbox.checked = selectedItemIds.has(itemId);
+                if (checkbox.checked) {
+                    card.classList.add('border-blue-500', 'bg-blue-600/5');
+                    card.classList.remove('border-white/5');
+                } else {
+                    card.classList.remove('border-blue-500', 'bg-blue-600/5');
+                    card.classList.add('border-white/5');
+                }
+            }
+            updateBatchActionBar();
+        }
+
+        function updateBatchActionBar() {
+            const bar = document.getElementById('batch-action-bar');
+            const countTxt = document.getElementById('batch-count-txt');
+            const delBtn = document.getElementById('btn-batch-delete');
+            
+            if (selectModeActive && selectedItemIds.size > 0) {
+                countTxt.innerText = `${selectedItemIds.size} file${selectedItemIds.size > 1 ? 's' : ''} selected`;
+                if (activeConnection && activeConnection.role === 'admin') {
+                    delBtn.style.display = 'inline-flex';
+                } else {
+                    delBtn.style.display = 'none';
+                }
+                bar.style.display = 'flex';
+            } else {
+                bar.style.display = 'none';
+            }
+        }
+
+        function updateFolderActionButtons() {
+            const selectedFolder = document.getElementById('select-folder').value;
+            const dlFolderBtn = document.getElementById('btn-download-folder');
+            const delFolderBtn = document.getElementById('btn-delete-folder');
+            
+            if (!dlFolderBtn || !delFolderBtn) return;
+            
+            if (selectedFolder === 'root') {
+                dlFolderBtn.style.display = 'none';
+                delFolderBtn.style.display = 'none';
+            } else {
+                dlFolderBtn.style.display = 'inline-flex';
+                if (activeConnection && activeConnection.role === 'admin') {
+                    delFolderBtn.style.display = 'inline-flex';
+                } else {
+                    delFolderBtn.style.display = 'none';
+                }
+            }
+        }
+
+        function onFolderChanged() {
+            if (selectModeActive) {
+                toggleSelectMode();
+            }
+            loadGalleryData();
+        }
+
+        async function downloadFolder() {
+            const selectedFolder = document.getElementById('select-folder').value;
+            if (selectedFolder === 'root') return;
+            
+            const url = `${activeConnection.url}/api/folders/${selectedFolder}/download`;
+            const filename = `${selectedFolder}.zip`;
+            
+            await downloadFileFromUrl(url, filename, false);
+        }
+
+        async function deleteFolder() {
+            const selectedFolder = document.getElementById('select-folder').value;
+            if (selectedFolder === 'root') return;
+            
+            if (confirm(`Are you sure you want to permanently delete the folder "${selectedFolder}" and all its contents?`)) {
+                try {
+                    const res = await fetch(`${activeConnection.url}/api/folders/${selectedFolder}`, {
+                        method: 'DELETE',
+                        headers: {
+                            'x-device-token': activeConnection.token
+                        }
+                    });
+                    if (res.ok) {
+                        document.getElementById('select-folder').value = 'root';
+                        onFolderChanged();
+                        alert(`Folder "${selectedFolder}" deleted successfully.`);
+                    } else {
+                        const err = await res.json();
+                        alert("Error deleting folder: " + err.detail);
+                    }
+                } catch (e) {
+                    alert("Error connecting to server to delete folder.");
+                }
+            }
+        }
+
+        async function downloadSelected() {
+            if (selectedItemIds.size === 0) return;
+            
+            const ids = Array.from(selectedItemIds);
+            const url = `${activeConnection.url}/api/items/batch-download`;
+            const filename = "vault_selection.zip";
+            
+            await downloadFileFromUrl(url, filename, true, { ids: ids });
+        }
+
+        async function deleteSelected() {
+            if (selectedItemIds.size === 0) return;
+            
+            if (confirm(`Are you sure you want to permanently delete the ${selectedItemIds.size} selected items?`)) {
+                try {
+                    const ids = Array.from(selectedItemIds);
+                    const res = await fetch(`${activeConnection.url}/api/items/batch-delete`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'x-device-token': activeConnection.token
+                        },
+                        body: JSON.stringify({ ids: ids })
+                    });
+                    if (res.ok) {
+                        toggleSelectMode();
+                        loadGalleryData();
+                    } else {
+                        const err = await res.json();
+                        alert("Delete selection failed: " + err.detail);
+                    }
+                } catch (e) {
+                    alert("Error connecting to server to delete selection.");
+                }
+            }
+        }
 
         function formatBytes(bytes, decimals = 2) {
             if (!bytes || bytes === 0) return '0 Bytes';
@@ -814,16 +1044,38 @@ HTML_CONTENT = """
             if(viewId === 'view-uploader') populateContextDropdowns();
         }
 
+        async function fetchWithTimeout(resource, options = {}) {
+            const { timeout = 3000 } = options;
+            const controller = new AbortController();
+            const id = setTimeout(() => controller.abort(), timeout);
+            try {
+                const response = await fetch(resource, {
+                    ...options,
+                    signal: controller.signal
+                });
+                clearTimeout(id);
+                return response;
+            } catch (e) {
+                clearTimeout(id);
+                throw e;
+            }
+        }
+
         async function verifyConnection() {
             try {
+                if (!window.pywebview || !window.pywebview.api) {
+                    setTimeout(verifyConnection, 50);
+                    return false;
+                }
                 const conn = await window.pywebview.api.get_client_connection();
                 activeConnection = conn;
                 
                 document.getElementById('indicator-client-url').innerText = conn.url;
                 
-                // Fetch stats as ping
-                const response = await fetch(`${conn.url}/api/auth/me`, {
-                    headers: { 'x-device-token': conn.token }
+                // Fetch stats as ping (Timeout of 2 seconds)
+                const response = await fetchWithTimeout(`${conn.url}/api/auth/me`, {
+                    headers: { 'x-device-token': conn.token },
+                    timeout: 2000
                 });
                 
                 if (response.ok) {
@@ -937,17 +1189,19 @@ HTML_CONTENT = """
             empty.style.display = "none";
 
             try {
-                // Fetch items list
-                const resItems = await fetch(`${activeConnection.url}/api/items`, {
-                    headers: { 'x-device-token': activeConnection.token }
+                // Fetch items list with 4s timeout
+                const resItems = await fetchWithTimeout(`${activeConnection.url}/api/items`, {
+                    headers: { 'x-device-token': activeConnection.token },
+                    timeout: 4000
                 });
                 if (!resItems.ok) throw new Error("Could not load gallery");
                 const list = await resItems.json();
                 activeGalleryItems = list;
                 
-                // Fetch folders list
-                const resFolders = await fetch(`${activeConnection.url}/api/folders`, {
-                    headers: { 'x-device-token': activeConnection.token }
+                // Fetch folders list with 4s timeout
+                const resFolders = await fetchWithTimeout(`${activeConnection.url}/api/folders`, {
+                    headers: { 'x-device-token': activeConnection.token },
+                    timeout: 4000
                 });
                 if (resFolders.ok) {
                     const fList = await resFolders.json();
@@ -988,6 +1242,9 @@ HTML_CONTENT = """
             const selectedFolder = document.getElementById('select-folder').value;
             const sortMode = document.getElementById('select-sort').value;
             
+            // Update folder actions button states
+            updateFolderActionButtons();
+            
             let filtered = [...activeGalleryItems];
             
             // 1. Filter by Folder
@@ -1025,7 +1282,6 @@ HTML_CONTENT = """
             } else if (sortMode === 'name-asc') {
                 filtered.sort((a, b) => a.name.localeCompare(b.name));
             } else if (sortMode === 'size-desc') {
-                // Approximate since size not loaded initially, but let's fall back
                 filtered.sort((a, b) => (b.size || 0) - (a.size || 0));
             }
             
@@ -1037,7 +1293,9 @@ HTML_CONTENT = """
             empty.style.display = "none";
             
             filtered.forEach(item => {
-                const ext = item.name.substring(item.name.lastIndexOf('.')).toLowerCase();
+                const itemName = item.name || item.suggested_filename || (item.saved_path ? item.saved_path.split('/').pop().split(String.fromCharCode(92)).pop() : 'unnamed');
+                const lastDot = itemName.lastIndexOf('.');
+                const ext = lastDot !== -1 ? itemName.substring(lastDot).toLowerCase() : '';
                 const isImage = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.heic', '.heif'].includes(ext);
                 const isVideo = ['.mp4', '.mov', '.avi', '.mkv'].includes(ext);
                 
@@ -1047,8 +1305,21 @@ HTML_CONTENT = """
                 }
 
                 const itemDiv = document.createElement('div');
-                itemDiv.className = "glass rounded-2xl overflow-hidden card-hover border border-white/5 cursor-pointer relative group flex flex-col justify-between aspect-square transition-all duration-300";
-                itemDiv.onclick = () => openLightbox(item);
+                itemDiv.id = `card-${item.id}`;
+                
+                const isSelected = selectModeActive && selectedItemIds.has(item.id);
+                itemDiv.className = `glass rounded-2xl overflow-hidden card-hover border cursor-pointer relative group flex flex-col justify-between aspect-square transition-all duration-300 ${
+                    isSelected ? 'border-blue-500 bg-blue-600/5' : 'border-white/5'
+                }`;
+                
+                itemDiv.onclick = (e) => {
+                    if (selectModeActive) {
+                        e.stopPropagation();
+                        toggleItemSelection(item.id);
+                    } else {
+                        openLightbox(item);
+                    }
+                };
 
                 let mediaBlock = "";
                 if (thumbSrc) {
@@ -1062,17 +1333,39 @@ HTML_CONTENT = """
                     </div>`;
                 }
 
+                let checkboxHtml = "";
+                if (selectModeActive) {
+                    checkboxHtml = `
+                        <div class="absolute top-3 left-3 z-10" onclick="event.stopPropagation(); toggleItemSelection('${item.id}');">
+                            <input type="checkbox" id="chk-${item.id}" ${isSelected ? 'checked' : ''} class="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 bg-slate-900 border-white/10 pointer-events-none">
+                        </div>
+                    `;
+                }
+
+                let contextBadgeHtml = "";
+                if (selectedFolder === 'root' && item.context && item.context !== 'root' && item.context !== 'default') {
+                    contextBadgeHtml = `
+                        <div class="absolute top-3 right-3 z-10 px-2 py-0.5 bg-slate-950/80 backdrop-blur-md border border-white/10 rounded-full text-[9px] font-bold text-blue-400 tracking-wide uppercase select-none pointer-events-none shadow-md">
+                            ${item.context}
+                        </div>
+                    `;
+                }
+
                 itemDiv.innerHTML = `
                     <div class="w-full flex-1 overflow-hidden relative bg-black/20">
+                        ${checkboxHtml}
+                        ${contextBadgeHtml}
                         ${mediaBlock}
                     </div>
                     <div class="p-3 bg-slate-950/80 border-t border-white/5 flex flex-col">
-                        <span class="text-xs font-semibold truncate text-slate-200 block">${item.name}</span>
+                        <span class="text-xs font-semibold truncate text-slate-200 block">${itemName}</span>
                         <span class="text-[10px] text-slate-500 mt-0.5 block">${item.timestamp ? item.timestamp.substring(0, 10) : 'No Date'}</span>
                     </div>
                 `;
                 grid.appendChild(itemDiv);
             });
+            
+            updateBatchActionBar();
         }
 
         function filterTimeline(year) {
@@ -1096,7 +1389,8 @@ HTML_CONTENT = """
             doc.style.display = "none";
             
             document.getElementById('lbl-lightbox-context').innerText = `Folder: ${item.context || 'root'}`;
-            document.getElementById('lbl-lightbox-filename').innerText = item.name;
+            const itemName = item.name || item.suggested_filename || (item.saved_path ? item.saved_path.split('/').pop().split(String.fromCharCode(92)).pop() : 'unnamed');
+            document.getElementById('lbl-lightbox-filename').innerText = itemName;
             document.getElementById('lbl-lightbox-date').innerText = item.timestamp ? item.timestamp.replace('T', ' ').substring(0, 19) : '--';
             document.getElementById('lbl-lightbox-size').innerText = 'Loading...';
             document.getElementById('row-lightbox-gps').style.display = "none";
@@ -1125,7 +1419,8 @@ HTML_CONTENT = """
             } catch (err) {}
 
             // Load media correctly based on type
-            const ext = item.name.substring(item.name.lastIndexOf('.')).toLowerCase();
+            const lastDot = itemName.lastIndexOf('.');
+            const ext = lastDot !== -1 ? itemName.substring(lastDot).toLowerCase() : '';
             const isImage = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.heic', '.heif'].includes(ext);
             const isVideo = ['.mp4', '.mov', '.avi', '.mkv'].includes(ext);
 
@@ -1142,7 +1437,7 @@ HTML_CONTENT = """
                 video.play();
             } else {
                 loading.style.display = "none";
-                document.getElementById('lightbox-doc-name').innerText = item.name;
+                document.getElementById('lightbox-doc-name').innerText = itemName;
                 doc.style.display = "flex";
             }
         }
@@ -1280,11 +1575,11 @@ HTML_CONTENT = """
         setInterval(updateStats, 5000);
         setInterval(fetchLogs, 5000);
         
-        window.onload = async () => {
+        window.onload = () => {
              addLog("Verifying client credentials...");
-             await verifyConnection();
+             verifyConnection(); // Asynchronous non-blocking call
              
-             // If STORAGE_DIR is local, fetch stats
+             // Fetch stats and logs
              updateStats();
              fetchLogs();
         };
@@ -1332,4 +1627,4 @@ if __name__ == "__main__":
     threading.Thread(target=run_tray, args=(win,), daemon=True).start()
 
     # 6. Start main UI loop
-    webview.start()
+    webview.start(debug=True)

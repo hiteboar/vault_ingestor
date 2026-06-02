@@ -656,6 +656,12 @@ async def get_items(x_device_token: str = Header(...)):
                         # Ensure unique ID and basic structure
                         if "id" not in item:
                             item["id"] = hashlib.md5(item.get("saved_path", "unknown").encode()).hexdigest()
+                        if "name" not in item:
+                            item["name"] = item.get("suggested_filename") or saved_path.name
+                        if "timestamp" not in item:
+                            item["timestamp"] = item.get("received_at") or "1970-01-01T00:00:00Z"
+                        if "context" not in item:
+                            item["context"] = "root"
 
                         # Generate web_path relative to STORAGE or BASE
                         try:
@@ -1314,6 +1320,13 @@ async def delete_folder(folder_name: str, x_device_token: str = Header(...)):
                         try:
                             # If the path is inside the folder_path, skip it (delete from log)
                             saved_path.relative_to(folder_path)
+                            # Delete thumbnails
+                            item_id = item.get("id")
+                            if item_id:
+                                for ext in [".webp", ".jpg", ".jpeg"]:
+                                    tp = CACHE_DIR / f"{item_id}{ext}"
+                                    if tp.exists():
+                                        tp.unlink()
                         except ValueError:
                             remaining_items.append(line)
                             
@@ -1327,6 +1340,212 @@ async def delete_folder(folder_name: str, x_device_token: str = Header(...)):
         log_audit("DELETE_FOLDER", folder_path, device)
                 
         return {"status": "success", "message": f"Folder {folder_name} deleted"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+def remove_temp_file(path_str: str):
+    try:
+        p = Path(path_str)
+        if p.exists():
+            p.unlink()
+    except Exception as e:
+        print(f"[CLEANUP_ERROR] Error removing temp file {path_str}: {e}")
+
+@app.get("/api/folders/{folder_name}/download")
+async def download_folder(
+    folder_name: str,
+    background_tasks: BackgroundTasks,
+    x_device_token: Optional[str] = Header(None),
+    token: Optional[str] = Query(None)
+):
+    """Compresses a named folder into a ZIP archive and returns it."""
+    import tempfile
+    import zipfile
+    
+    auth_token = x_device_token or token
+    if not auth_token:
+        raise HTTPException(status_code=401, detail="Token not provided")
+        
+    device = auth.get_device_info(auth_token)
+    if not device:
+        raise HTTPException(status_code=401, detail="Invalid token")
+        
+    role = device.get("role", "standard")
+    allowed_folders = device.get("allowed_folders", [])
+    
+    if role != "admin" and folder_name not in allowed_folders and "*" not in allowed_folders:
+        raise HTTPException(status_code=403, detail="No permission to access this folder")
+        
+    if folder_name == "root":
+        raise HTTPException(status_code=400, detail="Cannot download root/timeline folder")
+        
+    base_upload = STORAGE_DIR / "uploaded_files"
+    folder_path = (base_upload / folder_name).resolve()
+    
+    # Security: assure folder_path is inside base_upload
+    try:
+        folder_path.relative_to(base_upload)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied")
+        
+    if not folder_path.exists() or not folder_path.is_dir():
+        raise HTTPException(status_code=404, detail="Folder not found")
+        
+    try:
+        temp_dir = STORAGE_DIR / "_tmp"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        
+        zip_fd, zip_path_str = tempfile.mkstemp(suffix=".zip", dir=str(temp_dir))
+        os.close(zip_fd)
+        
+        with zipfile.ZipFile(zip_path_str, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for root, _, files in os.walk(folder_path):
+                for file in files:
+                    if file.startswith("."):
+                        continue
+                    file_path = Path(root) / file
+                    arcname = file_path.relative_to(folder_path)
+                    zip_file.write(file_path, arcname)
+                    
+        background_tasks.add_task(remove_temp_file, zip_path_str)
+        return FileResponse(
+            zip_path_str,
+            media_type="application/zip",
+            filename=f"{folder_name}.zip"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class BatchDownloadRequest(BaseModel):
+    ids: List[str]
+
+@app.post("/api/items/batch-download")
+async def batch_download(
+    req: BatchDownloadRequest,
+    background_tasks: BackgroundTasks,
+    x_device_token: str = Header(...)
+):
+    """Zips selected items by ID and returns the consolidated archive."""
+    import tempfile
+    import zipfile
+    
+    device = auth.get_device_info(x_device_token)
+    if not device:
+        raise HTTPException(status_code=401, detail="Invalid token")
+        
+    role = device.get("role", "standard")
+    allowed_folders = device.get("allowed_folders", [])
+    
+    files_to_zip = []
+    for item_id in req.ids:
+        item = metadata_cache.get_item(item_id)
+        if not item:
+            continue
+        saved_path_str = item.get("saved_path")
+        if not saved_path_str:
+            continue
+        saved_path = Path(saved_path_str)
+        if not saved_path.exists():
+            continue
+            
+        # Verify access
+        if role != "admin":
+            try:
+                rel_to_storage = saved_path.relative_to(STORAGE_DIR)
+                folder_name = rel_to_storage.parts[0] if len(rel_to_storage.parts) > 1 else "root"
+            except ValueError:
+                folder_name = "root"
+            if folder_name not in allowed_folders and "*" not in allowed_folders:
+                continue
+                
+        files_to_zip.append((saved_path, item.get("name") or saved_path.name))
+        
+    if not files_to_zip:
+        raise HTTPException(status_code=400, detail="No valid files selected for download")
+        
+    try:
+        temp_dir = STORAGE_DIR / "_tmp"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        
+        zip_fd, zip_path_str = tempfile.mkstemp(suffix=".zip", dir=str(temp_dir))
+        os.close(zip_fd)
+        
+        name_counts = {}
+        with zipfile.ZipFile(zip_path_str, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for file_path, name in files_to_zip:
+                base, ext = os.path.splitext(name)
+                if name in name_counts:
+                    name_counts[name] += 1
+                    arcname = f"{base}_{name_counts[name]}{ext}"
+                else:
+                    name_counts[name] = 0
+                    arcname = name
+                zip_file.write(file_path, arcname)
+                
+        background_tasks.add_task(remove_temp_file, zip_path_str)
+        return FileResponse(
+            zip_path_str,
+            media_type="application/zip",
+            filename="vault_selection.zip"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class BatchDeleteRequest(BaseModel):
+    ids: List[str]
+
+@app.post("/api/items/batch-delete")
+async def batch_delete(
+    req: BatchDeleteRequest,
+    x_device_token: str = Header(...)
+):
+    """Deletes multiple assets and their metadata logs in bulk (Admin only)."""
+    device = auth.get_device_info(x_device_token)
+    if not device or device.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can delete items")
+        
+    if not req.ids:
+        return {"status": "success", "message": "No items to delete"}
+        
+    if not META_LOG.exists():
+        raise HTTPException(status_code=404, detail="Metadata log not found")
+        
+    to_delete_set = set(req.ids)
+    deleted_count = 0
+    remaining_items = []
+    
+    try:
+        with open(META_LOG, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    item = json.loads(line)
+                    item_id = item.get("id")
+                    if item_id in to_delete_set:
+                        saved_path_str = item.get("saved_path")
+                        if saved_path_str:
+                            p = Path(saved_path_str)
+                            if p.exists():
+                                p.unlink()
+                                
+                        for ext in [".webp", ".jpg", ".jpeg"]:
+                            tp = CACHE_DIR / f"{item_id}{ext}"
+                            if tp.exists():
+                                tp.unlink()
+                                
+                        metadata_cache.remove(item_id)
+                        
+                        if item.get("context"):
+                            update_folder_meta(item.get("context"))
+                            
+                        log_audit("DELETE_ITEM", Path(saved_path_str or ""), device)
+                        deleted_count += 1
+                    else:
+                        remaining_items.append(line)
+                        
+        with open(META_LOG, "w", encoding="utf-8") as f:
+            f.writelines(remaining_items)
+            
+        return {"status": "success", "message": f"Successfully deleted {deleted_count} items"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
