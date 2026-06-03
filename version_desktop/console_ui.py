@@ -28,6 +28,7 @@ from api.main import app as fastapi_app
 from api.main import auth as fastapi_auth
 from app import bootstrap # Import startup logic from app.py
 
+
 # Basic configuration
 API_HOST = os.getenv("API_HOST", "127.0.0.1")
 API_PORT = int(os.getenv("API_PORT", "8081"))
@@ -35,6 +36,9 @@ API_URL = f"http://{API_HOST}:{API_PORT}"
 UI_TITLE = "Vault Ingestor - Management Console & Client"
 
 CLIENT_SETTINGS_FILE = BASE_DIR / "vault_internal" / "client_settings.json"
+
+server_started = False
+server_thread = None
 
 def load_client_settings():
     """Loads active client connection or defaults to local server."""
@@ -63,7 +67,9 @@ def save_client_settings(settings):
 
 def run_server():
     """Launches the FastAPI server in a separate thread."""
+    global server_started
     bootstrap()
+    server_started = True
     uvicorn.run(fastapi_app, host=API_HOST, port=API_PORT)
 
 class Api:
@@ -77,6 +83,126 @@ class Api:
             "percent": 0,
             "error": ""
         }
+
+    def is_local_server_running(self):
+        """Returns True if the local server is running."""
+        global server_started
+        return server_started
+
+    def get_local_server_config(self):
+        """Reads .env configuration and returns current settings."""
+        env_file = BASE_DIR / ".env"
+        config = {
+            "configured": False,
+            "STORAGE_DIR": "",
+            "API_PORT": "8081",
+            "ENABLE_REMOTE_ACCESS": "true"
+        }
+        from dotenv import dotenv_values
+        if env_file.exists():
+            try:
+                env_vars = dotenv_values(env_file)
+                if env_vars.get("STORAGE_DIR"):
+                    config["configured"] = True
+                    config["STORAGE_DIR"] = env_vars["STORAGE_DIR"]
+                if env_vars.get("API_PORT"):
+                    config["API_PORT"] = env_vars["API_PORT"]
+                if env_vars.get("ENABLE_REMOTE_ACCESS"):
+                    config["ENABLE_REMOTE_ACCESS"] = env_vars["ENABLE_REMOTE_ACCESS"]
+            except Exception as e:
+                print(f"[CONFIG_ERROR] Error reading dotenv: {e}")
+        return config
+
+    def select_storage_folder(self):
+        """Opens a native folder chooser dialog and returns the selected path."""
+        if not webview.windows:
+            return ""
+        window = webview.windows[0]
+        res = window.create_file_dialog(webview.FOLDER_DIALOG)
+        if res:
+            if isinstance(res, list):
+                return res[0]
+            return res
+        return ""
+
+    def activate_local_server(self, port, storage_dir, enable_remote):
+        """Saves configuration to .env, updates modules, and launches the uvicorn server thread."""
+        global server_started, server_thread, API_PORT
+        
+        if server_started:
+            return {"success": True, "message": "Server is already running."}
+            
+        port = str(port).strip() or "8081"
+        storage_dir = str(storage_dir).strip()
+        if not storage_dir:
+            return {"success": False, "message": "Storage Directory is required."}
+            
+        storage_path = Path(storage_dir).resolve()
+        
+        # Validate storage path
+        from app import is_storage_ready
+        ready, err_msg = is_storage_ready(storage_path)
+        if not ready:
+            return {"success": False, "message": f"Storage validation error: {err_msg}"}
+            
+        # Write keys to .env
+        env_file = BASE_DIR / ".env"
+        from dotenv import set_key
+        try:
+            if not env_file.exists():
+                env_file.touch()
+            set_key(str(env_file), "STORAGE_DIR", str(storage_path))
+            set_key(str(env_file), "META_LOG", str(storage_path / "metadata.jsonl"))
+            set_key(str(env_file), "API_PORT", port)
+            set_key(str(env_file), "ENABLE_REMOTE_ACCESS", "true" if enable_remote else "false")
+        except Exception as e:
+            return {"success": False, "message": f"Failed to write to .env: {e}"}
+            
+        # Dynamic reinitialization of api.main module level globals
+        try:
+            import api.main as api_main
+            api_main.reinitialize_config()
+            
+            # Auto-register token transparently in auth manager
+            local_token = "desktop_local_admin_token"
+            if local_token not in api_main.auth.linked_devices:
+                api_main.auth.linked_devices[local_token] = {
+                    "role": "admin",
+                    "allowed_folders": ["*"],
+                    "linked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "last_seen": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                }
+                api_main.auth._save(api_main.auth.state_file, api_main.auth.linked_devices)
+                print("[AUTH] registered local token during activation.")
+        except Exception as e:
+            return {"success": False, "message": f"Failed to reinitialize modules: {e}"}
+            
+        # Start server thread
+        try:
+            API_PORT = int(port)
+            server_started = True
+            server_thread = threading.Thread(target=run_server, daemon=True)
+            server_thread.start()
+            
+            # Sleep a bit to allow uvicorn thread to bind/start
+            time.sleep(1.2)
+            
+            # Auto-connect client settings to local server if not already remote
+            current_settings = load_client_settings()
+            if current_settings.get("is_local", True):
+                new_settings = {
+                    "url": f"http://127.0.0.1:{port}",
+                    "token": "desktop_local_admin_token",
+                    "is_local": True,
+                    "role": "admin"
+                }
+                save_client_settings(new_settings)
+                
+            return {"success": True}
+        except Exception as e:
+            server_started = False
+            return {"success": False, "message": f"Failed to start server thread: {e}"}
+
 
     def get_status(self):
         return {"status": "ok", "message": "Console Bridge Active"}
@@ -494,7 +620,7 @@ HTML_CONTENT = """
             <div class="mb-4">
                 <span class="text-[10px] text-slate-500 font-bold uppercase tracking-wider block mb-2 px-3">Local Engine (Server)</span>
                 <nav class="space-y-1">
-                    <a id="btn-nav-dashboard" onclick="switchView('view-dashboard')" class="nav-btn flex items-center gap-3 text-slate-400 hover:text-white px-4 py-2.5 rounded-xl text-sm nav-active">
+                    <a id="btn-nav-dashboard" onclick="switchView('view-dashboard')" class="nav-btn flex items-center gap-3 text-slate-400 hover:text-white px-4 py-2.5 rounded-xl text-sm">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 002 2h2a2 2 0 002-2"/></svg>
                         Dashboard
                     </a>
@@ -514,7 +640,7 @@ HTML_CONTENT = """
             <div>
                 <span class="text-[10px] text-slate-500 font-bold uppercase tracking-wider block mb-2 px-3">Vault Client</span>
                 <nav class="space-y-1">
-                    <a id="btn-nav-gallery" onclick="switchView('view-gallery')" class="nav-btn flex items-center gap-3 text-slate-400 hover:text-white px-4 py-2.5 rounded-xl text-sm">
+                    <a id="btn-nav-gallery" onclick="switchView('view-gallery')" class="nav-btn flex items-center gap-3 text-slate-400 hover:text-white px-4 py-2.5 rounded-xl text-sm nav-active">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
                         Gallery Explorer
                     </a>
@@ -549,8 +675,75 @@ HTML_CONTENT = """
     <!-- Main Content Panel -->
     <div class="main-content flex-1 flex flex-col h-screen custom-scrollbar relative">
         
+        <!-- ====== VIEW: SERVER INACTIVE ====== -->
+        <div id="view-server-inactive" class="p-10 flex flex-col h-full justify-center items-center space-y-6 hidden">
+            <div class="glass max-w-xl w-full p-8 rounded-3xl border border-white/5 space-y-6 text-center">
+                <div class="w-16 h-16 bg-blue-600/10 border border-blue-500/20 rounded-2xl flex items-center justify-center text-blue-400 mx-auto">
+                    <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                    </svg>
+                </div>
+                
+                <!-- Stopped State -->
+                <div id="server-stopped-state" class="space-y-4">
+                    <h2 class="text-2xl font-bold tracking-tight">Local Server is Inactive</h2>
+                    <p class="text-sm text-slate-400">This application is running in Client Mode. You can connect to a remote Vault server or activate the local server on this PC to store files locally.</p>
+                    
+                    <div id="server-current-config" class="p-4 bg-slate-900/50 rounded-2xl border border-white/5 text-left space-y-2 hidden">
+                        <div class="text-xs text-slate-500 uppercase font-bold tracking-wide">Current Configuration</div>
+                        <div class="text-xs text-slate-300"><strong class="text-blue-400">Storage:</strong> <span id="lbl-stopped-storage">--</span></div>
+                        <div class="text-xs text-slate-300"><strong class="text-blue-400">Port:</strong> <span id="lbl-stopped-port">--</span></div>
+                    </div>
+                    
+                    <div class="flex gap-3 justify-center pt-2">
+                        <button onclick="startConfiguredServer()" id="btn-start-server" class="bg-blue-600 hover:bg-blue-500 text-white text-xs px-6 py-3 rounded-xl font-semibold transition-colors shadow-lg shadow-blue-500/20">Activate Local Server</button>
+                        <button onclick="showServerSetupForm()" id="btn-edit-server-setup" class="bg-slate-900 border border-white/10 hover:border-white/20 text-slate-300 hover:text-white text-xs px-6 py-3 rounded-xl font-semibold transition-all">Configure Server</button>
+                    </div>
+                </div>
+
+                <!-- Setup Form State -->
+                <div id="server-setup-state" class="space-y-4 text-left hidden">
+                    <h2 class="text-xl font-bold tracking-tight text-center">Local Server Configuration</h2>
+                    <p class="text-xs text-slate-400 text-center mb-4">Set up the local server options. Click Browse to select a folder on your computer.</p>
+                    
+                    <div class="space-y-4">
+                        <div class="space-y-1.5">
+                            <label class="block text-xs font-semibold text-blue-300">Central Storage Directory</label>
+                            <div class="flex gap-2">
+                                <input type="text" id="setup-STORAGE_DIR" placeholder="e.g. C:/vault_storage" class="flex-1 bg-slate-900/50 border border-white/10 rounded-xl px-4 py-2.5 text-white text-xs focus:outline-none focus:border-blue-500 transition-colors">
+                                <button type="button" onclick="browseStorageFolder()" class="bg-slate-900 border border-white/10 hover:border-white/20 text-xs text-slate-300 hover:text-white px-4 rounded-xl font-medium transition-all">Browse...</button>
+                            </div>
+                        </div>
+                        
+                        <div class="space-y-1.5">
+                            <label class="block text-xs font-semibold text-blue-300">Local API Port</label>
+                            <input type="text" id="setup-API_PORT" placeholder="8081" class="w-full bg-slate-900/50 border border-white/10 rounded-xl px-4 py-2.5 text-white text-xs focus:outline-none focus:border-blue-500 transition-colors">
+                        </div>
+
+                        <div class="p-4 bg-white/5 rounded-xl border border-white/5 flex items-center justify-between">
+                            <div>
+                                <span class="text-xs font-semibold text-blue-300 block">Enable WAN Tunnel Access</span>
+                                <span class="text-[10px] text-slate-500 block">Expose central services securely over internet (temp Cloudflare address).</span>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="setup-ENABLE_REMOTE_ACCESS" checked class="sr-only peer">
+                                <div class="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                            </label>
+                        </div>
+                        
+                        <div id="setup-error-msg" class="text-xs text-rose-400 font-medium hidden"></div>
+
+                        <div class="flex gap-2 justify-end pt-2">
+                            <button type="button" onclick="cancelServerSetup()" id="btn-cancel-setup" class="bg-slate-900 border border-white/10 hover:border-white/20 text-slate-300 hover:text-white text-xs px-5 py-2.5 rounded-xl font-semibold transition-all">Cancel</button>
+                            <button type="button" onclick="submitServerSetup()" id="btn-submit-setup" class="bg-blue-600 hover:bg-blue-500 text-white text-xs px-5 py-2.5 rounded-xl font-semibold transition-colors shadow-lg shadow-blue-500/20">Save & Start Server</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- ====== VIEW: DASHBOARD ====== -->
-        <div id="view-dashboard" class="p-10 flex flex-col h-full space-y-6">
+        <div id="view-dashboard" class="p-10 flex flex-col h-full space-y-6 hidden">
             <header class="flex justify-between items-center">
                 <div>
                     <h1 class="text-3xl font-bold tracking-tight">System Monitor</h1>
@@ -684,7 +877,7 @@ HTML_CONTENT = """
         </div>
 
         <!-- ====== VIEW: VAULT GALLERY ====== -->
-        <div id="view-gallery" class="p-10 flex flex-col h-full space-y-6 hidden">
+        <div id="view-gallery" class="p-10 flex flex-col h-full space-y-6">
             <header class="flex justify-between items-end flex-wrap gap-4">
                 <div>
                     <h1 class="text-3xl font-bold tracking-tight">Vault Explorer</h1>
@@ -1150,13 +1343,23 @@ HTML_CONTENT = """
             return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
         }
 
+        let localServerActive = false;
+
         function switchView(viewId) {
+            // Intercept server tabs if local server is inactive
+            const serverViews = ['view-dashboard', 'view-config', 'view-mobile'];
+            let activeViewId = viewId;
+            if (!localServerActive && serverViews.includes(viewId)) {
+                activeViewId = 'view-server-inactive';
+            }
+
             document.getElementById('view-dashboard').style.display = 'none';
             document.getElementById('view-config').style.display = 'none';
             document.getElementById('view-mobile').style.display = 'none';
             document.getElementById('view-gallery').style.display = 'none';
             document.getElementById('view-uploader').style.display = 'none';
             document.getElementById('view-remote').style.display = 'none';
+            document.getElementById('view-server-inactive').style.display = 'none';
             
             document.getElementById('btn-nav-dashboard').classList.remove('nav-active');
             document.getElementById('btn-nav-config').classList.remove('nav-active');
@@ -1165,13 +1368,21 @@ HTML_CONTENT = """
             document.getElementById('btn-nav-uploader').classList.remove('nav-active');
             document.getElementById('btn-nav-remote').classList.remove('nav-active');
             
-            document.getElementById(viewId).style.display = 'flex';
-            document.getElementById('btn-nav-' + viewId.replace('view-', '')).classList.add('nav-active');
+            document.getElementById(activeViewId).style.display = 'flex';
             
-            if(viewId === 'view-config') loadConfig();
-            if(viewId === 'view-mobile') generatePairing();
-            if(viewId === 'view-gallery') loadGalleryData();
-            if(viewId === 'view-uploader') populateContextDropdowns();
+            // Still highlight the button they clicked in the sidebar
+            const navBtnId = 'btn-nav-' + viewId.replace('view-', '');
+            const navBtn = document.getElementById(navBtnId);
+            if (navBtn) navBtn.classList.add('nav-active');
+            
+            if (activeViewId === 'view-server-inactive') {
+                updateServerSetupUI();
+            } else {
+                if(viewId === 'view-config') loadConfig();
+                if(viewId === 'view-mobile') generatePairing();
+                if(viewId === 'view-gallery') loadGalleryData();
+                if(viewId === 'view-uploader') populateContextDropdowns();
+            }
         }
 
         async function fetchWithTimeout(resource, options = {}) {
@@ -1705,16 +1916,155 @@ HTML_CONTENT = """
             container.scrollTop = container.scrollHeight;
         }
 
-        setInterval(updateStats, 5000);
-        setInterval(fetchLogs, 5000);
+        async function updateServerSetupUI() {
+            try {
+                const config = await window.pywebview.api.get_local_server_config();
+                const stoppedState = document.getElementById('server-stopped-state');
+                const setupState = document.getElementById('server-setup-state');
+                const configDisplay = document.getElementById('server-current-config');
+                
+                if (config.configured) {
+                    stoppedState.classList.remove('hidden');
+                    setupState.classList.add('hidden');
+                    configDisplay.classList.remove('hidden');
+                    document.getElementById('lbl-stopped-storage').innerText = config.STORAGE_DIR;
+                    document.getElementById('lbl-stopped-port').innerText = config.API_PORT;
+                    document.getElementById('btn-start-server').innerText = "Activate Local Server";
+                } else {
+                    stoppedState.classList.add('hidden');
+                    setupState.classList.remove('hidden');
+                    document.getElementById('setup-STORAGE_DIR').value = config.STORAGE_DIR || "";
+                    document.getElementById('setup-API_PORT').value = config.API_PORT || "8081";
+                    document.getElementById('setup-ENABLE_REMOTE_ACCESS').checked = config.ENABLE_REMOTE_ACCESS === 'true';
+                }
+            } catch (e) {
+                console.error("Error updating server setup UI", e);
+            }
+        }
+
+        function showServerSetupForm() {
+            document.getElementById('server-stopped-state').classList.add('hidden');
+            document.getElementById('server-setup-state').classList.remove('hidden');
+            window.pywebview.api.get_local_server_config().then(config => {
+                document.getElementById('setup-STORAGE_DIR').value = config.STORAGE_DIR || "";
+                document.getElementById('setup-API_PORT').value = config.API_PORT || "8081";
+                document.getElementById('setup-ENABLE_REMOTE_ACCESS').checked = config.ENABLE_REMOTE_ACCESS === 'true';
+            });
+        }
+
+        async function browseStorageFolder() {
+            const path = await window.pywebview.api.select_storage_folder();
+            if (path) {
+                document.getElementById('setup-STORAGE_DIR').value = path;
+            }
+        }
+
+        function cancelServerSetup() {
+            window.pywebview.api.get_local_server_config().then(config => {
+                if (config.configured) {
+                    updateServerSetupUI();
+                } else {
+                    switchView('view-gallery');
+                }
+            });
+        }
+
+        async function submitServerSetup() {
+            const storageDir = document.getElementById('setup-STORAGE_DIR').value.trim();
+            const port = document.getElementById('setup-API_PORT').value.trim();
+            const enableRemote = document.getElementById('setup-ENABLE_REMOTE_ACCESS').checked;
+            const err = document.getElementById('setup-error-msg');
+            const submitBtn = document.getElementById('btn-submit-setup');
+            
+            if (!storageDir) {
+                err.innerText = "Storage Directory is required.";
+                err.classList.remove('hidden');
+                return;
+            }
+            
+            err.classList.add('hidden');
+            submitBtn.disabled = true;
+            submitBtn.innerText = "Activating...";
+            
+            try {
+                const res = await window.pywebview.api.activate_local_server(port, storageDir, enableRemote);
+                if (res.success) {
+                    localServerActive = true;
+                    addLog("[System] Local server activated and started successfully.");
+                    alert("Local server activated and started successfully!");
+                    await verifyConnection();
+                    switchView('view-dashboard');
+                } else {
+                    err.innerText = res.message;
+                    err.classList.remove('hidden');
+                }
+            } catch (e) {
+                err.innerText = "Internal error activating local server: " + e.message;
+                err.classList.remove('hidden');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.innerText = "Save & Start Server";
+            }
+        }
+
+        async function startConfiguredServer() {
+            const btn = document.getElementById('btn-start-server');
+            btn.disabled = true;
+            btn.innerText = "Starting...";
+            
+            try {
+                const config = await window.pywebview.api.get_local_server_config();
+                const res = await window.pywebview.api.activate_local_server(
+                    config.API_PORT,
+                    config.STORAGE_DIR,
+                    config.ENABLE_REMOTE_ACCESS === 'true'
+                );
+                if (res.success) {
+                    localServerActive = true;
+                    addLog("[System] Local server started successfully.");
+                    await verifyConnection();
+                    switchView('view-dashboard');
+                } else {
+                    alert("Error starting server: " + res.message);
+                }
+            } catch (e) {
+                alert("Error starting server: " + e.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "Activate Local Server";
+            }
+        }
+
+        setInterval(() => {
+            if (localServerActive) updateStats();
+        }, 5000);
         
-        window.onload = () => {
-             addLog("Verifying client credentials...");
-             verifyConnection(); // Asynchronous non-blocking call
+        setInterval(() => {
+            if (localServerActive) fetchLogs();
+        }, 5000);
+        
+        window.onload = async () => {
+             addLog("Initializing Vault Ingestor Desktop Hub...");
              
-             // Fetch stats and logs
-             updateStats();
-             fetchLogs();
+             // 1. Check if local server is running
+             try {
+                 localServerActive = await window.pywebview.api.is_local_server_running();
+             } catch (e) {
+                 localServerActive = false;
+             }
+             
+             // 2. Verify connection
+             addLog("Verifying client credentials...");
+             await verifyConnection();
+             
+             // 3. Switch to default client view (Gallery Explorer)
+             switchView('view-gallery');
+             
+             // 4. Fetch initial stats and logs if local server is active
+             if (localServerActive) {
+                 updateStats();
+                 fetchLogs();
+             }
         };
     </script>
 </body>
@@ -1722,29 +2072,7 @@ HTML_CONTENT = """
 """
 
 if __name__ == "__main__":
-    # 1. Register a local admin token transparently so client boots linked by default
-    local_token = "desktop_local_admin_token"
-    try:
-        if local_token not in fastapi_auth.linked_devices:
-            fastapi_auth.linked_devices[local_token] = {
-                "role": "admin",
-                "allowed_folders": ["*"],
-                "linked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "last_seen": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }
-            fastapi_auth._save(fastapi_auth.state_file, fastapi_auth.linked_devices)
-            print("[AUTH] transparently auto-registered local desktop client token.")
-    except Exception as e:
-        print(f"[AUTH_WARNING] Could not auto-register local token: {e}")
-
-    # 2. Start FastAPI server in background
-    t = threading.Thread(target=run_server, daemon=True)
-    t.start()
-    
-    # 3. Wait a bit for the server to be ready
-    time.sleep(1.5)
-
-    # 4. Launch the desktop window
+    # Launch the desktop window directly in client mode
     api = Api()
     win = webview.create_window(UI_TITLE, html=HTML_CONTENT, width=1280, height=800, js_api=api)
     
@@ -1756,8 +2084,8 @@ if __name__ == "__main__":
         
     win.events.closing += on_closing
     
-    # 5. Start secondary thread for the System Tray
+    # Start secondary thread for the System Tray
     threading.Thread(target=run_tray, args=(win,), daemon=True).start()
 
-    # 6. Start main UI loop
+    # Start main UI loop
     webview.start(debug=True)

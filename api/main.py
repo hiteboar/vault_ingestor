@@ -81,6 +81,34 @@ RECOVERY_FILE = BASE_DIR / "vault_internal" / ".recovery_token"
 # However, we pass a safe path to avoid initial crash
 auth = AuthManager(get_robust_path(STORAGE_DIR / ".vault", "vault_auth"))
 
+def reinitialize_config():
+    """Dynamically re-initializes configuration variables after .env has changed."""
+    global STORAGE_DIR, SAFE_STORAGE_DIR, META_LOG, CACHE_DIR, AUDIT_LOG, auth
+    from dotenv import load_dotenv
+    load_dotenv(override=True)
+    
+    STORAGE_DIR = Path(os.getenv("STORAGE_DIR", str(BASE_DIR / "vault_storage"))).resolve()
+    SAFE_STORAGE_DIR = get_robust_path(STORAGE_DIR, "storage")
+    META_LOG = Path(os.getenv("META_LOG", str(SAFE_STORAGE_DIR / "metadata.jsonl"))).resolve()
+    CACHE_DIR = get_robust_path(STORAGE_DIR / ".cache" / "thumbnails", "thumbnails")
+    AUDIT_LOG = SAFE_STORAGE_DIR / "audit.log"
+    
+    # Reinitialize auth manager
+    auth_dir = get_robust_path(STORAGE_DIR / ".vault", "vault_auth")
+    auth.state_dir = auth_dir
+    auth.state_file = auth_dir / "linked_devices.json"
+    auth.pin_file = auth_dir / "pending_pins.json"
+    try:
+        auth.state_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        print(f"[AUTH_ERROR] Could not create state directory: {e}")
+    auth.linked_devices = auth._load(auth.state_file)
+    
+    # Reload metadata
+    metadata_cache.load()
+    print(f"[CONFIG] Reinitialized config with STORAGE_DIR: {STORAGE_DIR}")
+
+
 def maintain_cache(cache_dir: Path, max_size_mb: int = 500):
     """Deletes the oldest thumbnails if the space limit is exceeded."""
     try:
