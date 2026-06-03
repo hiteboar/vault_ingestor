@@ -55,7 +55,9 @@ def process_one(
         else:
             hash_index.add(file_hash, saved_path)
 
+    import hashlib
     append_jsonl(meta_log, {
+        "id": hashlib.md5(str(saved_path).encode()).hexdigest(),
         "source": media.source,
         "sender_id": media.sender_id,
         "sender_name": media.sender_name,

@@ -7,7 +7,10 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 # Ensure core is importable from the subfolder
-BASE_DIR = Path(__file__).resolve().parent.parent
+if getattr(sys, 'frozen', False):
+    BASE_DIR = Path(sys.executable).parent
+else:
+    BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.append(str(BASE_DIR))
 
 import webview
@@ -174,14 +177,14 @@ class Api:
             
         try:
             settings = load_client_settings()
+            token = settings.get("token", "desktop_local_admin_token")
             headers = {
-                "x-device-token": settings["token"]
+                "x-device-token": token
             }
             
-            # Prepend base URL robustly to prevent double slashes (which cause method-dropping redirects)
             full_url = url
             if not url.startswith("http"):
-                base_url = settings['url'].rstrip('/')
+                base_url = settings.get("url", API_URL).rstrip('/')
                 rel_path = url.lstrip('/')
                 full_url = f"{base_url}/{rel_path}"
                 
@@ -199,6 +202,63 @@ class Api:
                 res = requests.get(full_url, headers=headers, stream=True, timeout=120)
                 
             print(f"[DEBUG] Response status: {res.status_code}, redirect history: {res.history}")
+                
+            if res.status_code != 200:
+                try:
+                    err_msg = res.text[:200]
+                except:
+                    err_msg = "Unknown error"
+                return {"success": False, "message": f"Server error ({res.status_code}): {err_msg}"}
+                
+            with open(save_path, 'wb') as f:
+                for chunk in res.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        
+            return {"success": True, "path": save_path}
+        except Exception as e:
+            return {"success": False, "message": str(e)}
+
+    def download_post_to_file(self, url, filename, post_data_str):
+        """Downloads via POST request and prompts save file dialog. Dedicated method to avoid pywebview bool coercion issues."""
+        print(f"[DEBUG] download_post_to_file called: url={url}, filename={filename}, post_data_str={post_data_str}")
+        if not webview.windows:
+            return {"success": False, "message": "No active window"}
+            
+        window = webview.windows[0]
+        save_path = window.create_file_dialog(
+            webview.SAVE_DIALOG,
+            directory="",
+            save_filename=filename
+        )
+        
+        if not save_path:
+            return {"success": False, "message": "Cancelled"}
+            
+        if isinstance(save_path, list):
+            if not save_path:
+                return {"success": False, "message": "Cancelled"}
+            save_path = save_path[0]
+            
+        try:
+            settings = load_client_settings()
+            token = settings.get("token", "desktop_local_admin_token")
+            headers = {
+                "x-device-token": token,
+                "Content-Type": "application/json"
+            }
+            
+            full_url = url
+            if not url.startswith("http"):
+                base_url = settings.get("url", API_URL).rstrip('/')
+                rel_path = url.lstrip('/')
+                full_url = f"{base_url}/{rel_path}"
+                
+            post_data = json.loads(post_data_str) if post_data_str else {}
+            print(f"[DEBUG] POST {full_url} with data: {post_data}")
+            
+            res = requests.post(full_url, headers=headers, json=post_data, stream=True, timeout=120)
+            print(f"[DEBUG] Response status: {res.status_code}")
                 
             if res.status_code != 200:
                 try:
@@ -1036,10 +1096,22 @@ HTML_CONTENT = """
             if (selectedItemIds.size === 0) return;
             
             const ids = Array.from(selectedItemIds);
-            const url = `${activeConnection.url}/api/items/batch-download`;
-            const filename = "vault_selection.zip";
+            const postDataStr = JSON.stringify({ ids: ids });
             
-            await downloadFileFromUrl(url, filename, true, { ids: ids });
+            try {
+                const res = await window.pywebview.api.download_post_to_file(
+                    '/api/items/batch-download',
+                    'vault_selection.zip',
+                    postDataStr
+                );
+                if (res.success) {
+                    // Downloaded successfully
+                } else if (res.message !== "Cancelled") {
+                    alert("Download failed: " + res.message);
+                }
+            } catch (e) {
+                alert("Error downloading file: " + e.message);
+            }
         }
 
         async function deleteSelected() {
@@ -1254,7 +1326,11 @@ HTML_CONTENT = """
                 });
                 if (!resItems.ok) throw new Error("Could not load gallery");
                 const list = await resItems.json();
-                activeGalleryItems = list;
+                const uniqueMap = new Map();
+                list.forEach(item => {
+                    uniqueMap.set(item.id, item);
+                });
+                activeGalleryItems = Array.from(uniqueMap.values());
                 
                 // Fetch folders list with 4s timeout
                 const resFolders = await fetchWithTimeout(`${activeConnection.url}/api/folders`, {

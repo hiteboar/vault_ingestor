@@ -107,7 +107,11 @@ def run_full_scan():
             for line in f:
                 if line.strip():
                     item = json.loads(line)
-                    if "id" in item: registered_ids.add(item["id"])
+                    item_id = item.get("id")
+                    if not item_id and "saved_path" in item:
+                        item_id = hashlib.md5(str(Path(item["saved_path"]).resolve()).encode()).hexdigest()
+                    if item_id:
+                        registered_ids.add(item_id)
 
     new_items = []
     found_count = 0

@@ -42,7 +42,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+import sys
+if getattr(sys, 'frozen', False):
+    BASE_DIR = Path(sys.executable).parent
+else:
+    BASE_DIR = Path(__file__).resolve().parent.parent
 # We look for storage_dir in env or use default
 from dotenv import load_dotenv, set_key
 load_dotenv()
@@ -307,14 +311,17 @@ class MetadataManager:
             print(f"[META_WARNING] Error indexing physical files for self-healing: {e}")
 
         new_cache = {}
+        path_to_id = {}
         healed_count = 0
-        records_to_write = []
+        rewrite_needed = False
+        original_line_count = 0
         
         try:
             with open(META_LOG, "r", encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
+                    original_line_count += 1
                     item = json.loads(line)
                     saved_path_str = item.get("saved_path", "")
                     saved_path = Path(saved_path_str) if saved_path_str else None
@@ -335,20 +342,36 @@ class MetadataManager:
                     if not item_id:
                         item_id = hashlib.md5(item.get("saved_path", "").encode()).hexdigest()
                         item["id"] = item_id
+                        rewrite_needed = True
                     
-                    new_cache[item_id] = item
-                    records_to_write.append(json.dumps(item) + "\n")
+                    # Deduplicate by resolved physical path
+                    path_key = str(Path(item["saved_path"]).resolve())
+                    if path_key in path_to_id:
+                        existing_id = path_to_id[path_key]
+                        existing_item = new_cache[existing_id]
+                        # Prioritize keeping the one that is NOT a manual_scan
+                        if existing_item.get("source") == "manual_scan" and item.get("source") != "manual_scan":
+                            del new_cache[existing_id]
+                            new_cache[item_id] = item
+                            path_to_id[path_key] = item_id
+                            rewrite_needed = True
+                        else:
+                            rewrite_needed = True
+                    else:
+                        new_cache[item_id] = item
+                        path_to_id[path_key] = item_id
 
-            # 2. Si hubo registros auto-reparados, hacemos backup y reescribimos de forma segura
-            if healed_count > 0:
+            # 2. Si hubo registros auto-reparados o deduplicados, hacemos backup y reescribimos de forma segura
+            if healed_count > 0 or rewrite_needed or len(new_cache) < original_line_count:
                 try:
                     backup_path = META_LOG.with_suffix(".jsonl.bak")
                     shutil.copy2(META_LOG, backup_path)
                     print(f"[SELF-HEAL] Creado backup de seguridad en {backup_path}")
                     
                     with open(META_LOG, "w", encoding="utf-8") as f:
-                        f.writelines(records_to_write)
-                    print(f"[SELF-HEAL] ¡Se han reparado {healed_count} registros de metadatos automáticamente!")
+                        for item in new_cache.values():
+                            f.write(json.dumps(item) + "\n")
+                    print(f"[SELF-HEAL] ¡Se han reparado/deduplicado metadatos automáticamente! (Deduplicados: {original_line_count - len(new_cache)})")
                 except Exception as save_err:
                     print(f"[SELF-HEAL_ERROR] Error al guardar metadatos reparados: {save_err}")
 
@@ -627,58 +650,52 @@ async def get_items(x_device_token: str = Header(...)):
     role = device.get("role", "standard")
     allowed_folders = device.get("allowed_folders", [])
 
-    if not META_LOG.exists():
-        return []
-    
     items = []
     try:
-        with open(META_LOG, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
+        for item in list(metadata_cache._cache.values()):
+            try:
+                saved_path = Path(item["saved_path"])
+                
+                # Verify physical existence
+                if not saved_path.exists():
+                    continue
+                
+                # Verify access for standard users
+                if role != "admin":
                     try:
-                        item = json.loads(line)
-                        saved_path = Path(item["saved_path"])
-                        
-                        # Verify physical existence
-                        if not saved_path.exists():
-                            continue
-                        
-                        # Verify access for standard users
-                        if role != "admin":
-                            try:
-                                rel_to_storage = saved_path.relative_to(STORAGE_DIR)
-                                folder_name = rel_to_storage.parts[0] if len(rel_to_storage.parts) > 1 else "root"
-                            except ValueError:
-                                folder_name = "root"
-                            if folder_name not in allowed_folders and "*" not in allowed_folders:
-                                continue
-
-                        # Ensure unique ID and basic structure
-                        if "id" not in item:
-                            item["id"] = hashlib.md5(item.get("saved_path", "unknown").encode()).hexdigest()
-                        if "name" not in item:
-                            item["name"] = item.get("suggested_filename") or saved_path.name
-                        if "timestamp" not in item:
-                            item["timestamp"] = item.get("received_at") or "1970-01-01T00:00:00Z"
-                        if "context" not in item:
-                            item["context"] = "root"
-
-                        # Generate web_path relative to STORAGE or BASE
-                        try:
-                            # Try relative to storage first (most common)
-                            rel = saved_path.relative_to(SAFE_STORAGE_DIR)
-                            item["web_path"] = str(rel).replace("\\", "/")
-                        except ValueError:
-                            try:
-                                # Try relative to project root
-                                rel = saved_path.relative_to(BASE_DIR)
-                                item["web_path"] = str(rel).replace("\\", "/")
-                            except ValueError:
-                                # Fallback to filename
-                                item["web_path"] = saved_path.name
-                        items.append(item)
-                    except Exception:
+                        rel_to_storage = saved_path.relative_to(STORAGE_DIR)
+                        folder_name = rel_to_storage.parts[0] if len(rel_to_storage.parts) > 1 else "root"
+                    except ValueError:
+                        folder_name = "root"
+                    if folder_name not in allowed_folders and "*" not in allowed_folders:
                         continue
+
+                # Ensure unique ID and basic structure
+                if "id" not in item:
+                    item["id"] = hashlib.md5(item.get("saved_path", "unknown").encode()).hexdigest()
+                if "name" not in item:
+                    item["name"] = item.get("suggested_filename") or saved_path.name
+                if "timestamp" not in item:
+                    item["timestamp"] = item.get("received_at") or "1970-01-01T00:00:00Z"
+                if "context" not in item:
+                    item["context"] = "root"
+
+                # Generate web_path relative to STORAGE or BASE
+                try:
+                    # Try relative to storage first (most common)
+                    rel = saved_path.relative_to(SAFE_STORAGE_DIR)
+                    item["web_path"] = str(rel).replace("\\", "/")
+                except ValueError:
+                    try:
+                        # Try relative to project root
+                        rel = saved_path.relative_to(BASE_DIR)
+                        item["web_path"] = str(rel).replace("\\", "/")
+                    except ValueError:
+                        # Fallback to filename
+                        item["web_path"] = saved_path.name
+                items.append(item)
+            except Exception:
+                continue
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
@@ -1436,30 +1453,43 @@ async def batch_download(
     role = device.get("role", "standard")
     allowed_folders = device.get("allowed_folders", [])
     
+    # Build a lookup of items by ID from metadata_cache
+    requested_ids = set(req.ids)
     files_to_zip = []
-    for item_id in req.ids:
-        item = metadata_cache.get_item(item_id)
-        if not item:
-            continue
-        saved_path_str = item.get("saved_path")
-        if not saved_path_str:
-            continue
-        saved_path = Path(saved_path_str)
-        if not saved_path.exists():
-            continue
-            
-        # Verify access
-        if role != "admin":
+    
+    try:
+        for item in list(metadata_cache._cache.values()):
             try:
-                rel_to_storage = saved_path.relative_to(STORAGE_DIR)
-                folder_name = rel_to_storage.parts[0] if len(rel_to_storage.parts) > 1 else "root"
-            except ValueError:
-                folder_name = "root"
-            if folder_name not in allowed_folders and "*" not in allowed_folders:
-                continue
+                item_id = item.get("id")
+                if not item_id:
+                    item_id = hashlib.md5(item.get("saved_path", "unknown").encode()).hexdigest()
                 
-        files_to_zip.append((saved_path, item.get("name") or saved_path.name))
-        
+                if item_id not in requested_ids:
+                    continue
+                
+                saved_path_str = item.get("saved_path")
+                if not saved_path_str:
+                    continue
+                saved_path = Path(saved_path_str)
+                if not saved_path.exists():
+                    continue
+                    
+                # Verify access
+                if role != "admin":
+                    try:
+                        rel_to_storage = saved_path.relative_to(STORAGE_DIR)
+                        folder_name = rel_to_storage.parts[0] if len(rel_to_storage.parts) > 1 else "root"
+                    except ValueError:
+                        folder_name = "root"
+                    if folder_name not in allowed_folders and "*" not in allowed_folders:
+                        continue
+                        
+                files_to_zip.append((saved_path, item.get("name") or item.get("suggested_filename") or saved_path.name))
+            except Exception:
+                continue
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading metadata: {e}")
+    
     if not files_to_zip:
         raise HTTPException(status_code=400, detail="No valid files selected for download")
         
@@ -1520,6 +1550,8 @@ async def batch_delete(
                 if line.strip():
                     item = json.loads(line)
                     item_id = item.get("id")
+                    if not item_id:
+                        item_id = hashlib.md5(item.get("saved_path", "unknown").encode()).hexdigest()
                     if item_id in to_delete_set:
                         saved_path_str = item.get("saved_path")
                         if saved_path_str:
