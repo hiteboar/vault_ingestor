@@ -584,6 +584,11 @@ HTML_CONTENT = """
     <title>Vault Ingestor - Desktop UI</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
+    <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
     <style>
         body { font-family: 'Outfit', sans-serif; background: #0b0f19; color: #f8fafc; overflow: hidden; display: flex !important; }
         .glass { background: rgba(17, 24, 39, 0.7); backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.06); }
@@ -598,6 +603,9 @@ HTML_CONTENT = """
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 9px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.25); }
+        .leaflet-container { background: #0b0f19 !important; }
+        .custom-cluster-icon { background: transparent !important; border: none !important; }
+        .custom-marker-icon { background: transparent !important; border: none !important; }
     </style>
 </head>
 <body class="radial-bg flex select-none">
@@ -643,6 +651,11 @@ HTML_CONTENT = """
                     <a id="btn-nav-gallery" onclick="switchView('view-gallery')" class="nav-btn flex items-center gap-3 text-slate-400 hover:text-white px-4 py-2.5 rounded-xl text-sm nav-active">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
                         Gallery Explorer
+                    </a>
+                    
+                    <a id="btn-nav-map" onclick="switchView('view-map')" class="nav-btn flex items-center gap-3 text-slate-400 hover:text-white px-4 py-2.5 rounded-xl text-sm">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" /></svg>
+                        Map Explorer
                     </a>
                     
                     <a id="btn-nav-uploader" onclick="switchView('view-uploader')" class="nav-btn flex items-center gap-3 text-slate-400 hover:text-white px-4 py-2.5 rounded-xl text-sm">
@@ -1051,6 +1064,23 @@ HTML_CONTENT = """
             </div>
         </div>
 
+        <!-- ====== VIEW: MAP EXPLORER ====== -->
+        <div id="view-map" class="p-10 flex flex-col h-full space-y-6 hidden">
+            <header class="flex justify-between items-center">
+                <div>
+                    <h1 class="text-3xl font-bold tracking-tight">Map Explorer</h1>
+                    <p class="text-sm text-slate-400 mt-1">Explore your vault items placed on a world map.</p>
+                </div>
+                <button onclick="loadMapData()" class="p-2.5 glass rounded-xl hover:bg-white/10 transition-all text-blue-400 shadow-md">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                </button>
+            </header>
+
+            <div class="glass rounded-3xl p-2 flex-1 flex flex-col overflow-hidden min-h-[450px] border border-white/5 relative">
+                <div id="main-map" class="w-full h-full rounded-2xl overflow-hidden z-10" style="min-height: 450px;"></div>
+            </div>
+        </div>
+
     </div>
 
     <!-- ====== MEDIA PREVIEWER LIGHTBOX MODAL ====== -->
@@ -1099,9 +1129,16 @@ HTML_CONTENT = """
                             <span id="lbl-lightbox-size" class="text-xs text-slate-300 font-medium">0.00 MB</span>
                         </div>
 
-                        <div id="row-lightbox-gps" class="hidden">
-                            <span class="text-[10px] text-slate-500 uppercase font-bold tracking-wider block mb-1">GPS Coordinates</span>
-                            <span id="lbl-lightbox-gps" class="text-xs text-blue-400 font-medium">--,--</span>
+                        <div id="row-lightbox-gps" class="hidden space-y-2">
+                            <div>
+                                <span class="text-[10px] text-slate-500 uppercase font-bold tracking-wider block mb-1">GPS Coordinates</span>
+                                <span id="lbl-lightbox-gps" class="text-xs text-blue-400 font-medium">--,--</span>
+                            </div>
+                            <div id="row-lightbox-address" style="display: none;">
+                                <span class="text-[10px] text-slate-500 uppercase font-bold tracking-wider block mb-1">Location</span>
+                                <span id="lbl-lightbox-address" class="text-xs text-slate-300 font-medium block">--</span>
+                            </div>
+                            <div id="lightbox-minimap" class="h-32 w-full rounded-xl border border-white/10 overflow-hidden mt-2 z-10" style="display: none;"></div>
                         </div>
                     </div>
                 </div>
@@ -1110,6 +1147,11 @@ HTML_CONTENT = """
                     <button onclick="triggerLocalOpen()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs py-2.5 rounded-xl transition-colors flex items-center justify-center gap-1.5 shadow-lg shadow-blue-500/10">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
                         Open Locally on PC
+                    </button>
+
+                    <button id="btn-lightbox-edit-gps" onclick="openGPSEditModal()" class="w-full bg-slate-900 border border-white/10 hover:border-white/20 text-slate-300 hover:text-white font-semibold text-xs py-2.5 rounded-xl transition-all flex items-center justify-center gap-1.5">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                        Edit Location
                     </button>
                     
                     <button id="btn-lightbox-download" onclick="downloadLightboxAsset()" class="w-full bg-slate-900 border border-white/10 hover:border-white/20 text-slate-300 hover:text-white font-semibold text-xs py-2.5 rounded-xl transition-all flex items-center justify-center gap-1.5">
@@ -1126,6 +1168,38 @@ HTML_CONTENT = """
         </div>
     </div>
 
+    <!-- ====== GPS EDIT MODAL ====== -->
+    <div id="gps-edit-modal" class="fixed inset-0 bg-slate-950/90 z-[60] flex items-center justify-center p-6 hidden">
+        <div class="glass w-full max-w-2xl rounded-3xl p-6 border border-white/10 shadow-2xl relative flex flex-col max-h-[90vh]">
+            <h2 class="text-xl font-bold mb-1">Edit Location</h2>
+            <p class="text-xs text-slate-400 mb-4">Search or click on the map to set coordinates.</p>
+            
+            <div class="flex gap-2 mb-4">
+                <input type="text" id="input-gps-search" placeholder="Search location (e.g. Madrid, Central Park)..." class="flex-1 bg-slate-900/50 border border-white/10 rounded-xl px-4 py-2 text-white text-sm focus:outline-none focus:border-blue-500 transition-colors">
+                <button onclick="searchLocationGPS()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl transition-colors">Search</button>
+            </div>
+
+            <div id="gps-picker-map" class="w-full h-64 bg-slate-800 rounded-xl mb-4 z-10 border border-white/10"></div>
+
+            <div class="grid grid-cols-2 gap-4 mb-2">
+                <div>
+                    <label class="block text-xs font-semibold text-blue-300 mb-1">Latitude</label>
+                    <input type="text" id="input-gps-lat" placeholder="e.g. 40.4168" onchange="updateGpsPickerFromInputs()" class="w-full bg-slate-900/50 border border-white/10 rounded-xl px-4 py-2 text-white text-sm focus:outline-none focus:border-blue-500 transition-colors">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-blue-300 mb-1">Longitude</label>
+                    <input type="text" id="input-gps-lon" placeholder="e.g. -3.7038" onchange="updateGpsPickerFromInputs()" class="w-full bg-slate-900/50 border border-white/10 rounded-xl px-4 py-2 text-white text-sm focus:outline-none focus:border-blue-500 transition-colors">
+                </div>
+            </div>
+            <div id="gps-edit-error" class="text-xs text-rose-400 font-medium hidden"></div>
+
+            <div class="mt-auto pt-4 flex items-center justify-end gap-2 border-t border-white/10">
+                <button onclick="closeGPSEditModal()" class="px-4 py-2 text-xs font-semibold text-slate-300 hover:text-white transition-colors">Cancel</button>
+                <button onclick="saveGPSData()" id="btn-save-gps" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-blue-500/20 transition-all">Save Location</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Script Block -->
     <script>
         let activeConnection = null;
@@ -1134,6 +1208,8 @@ HTML_CONTENT = """
         let activeTimelineFilter = 'All';
         let selectModeActive = false;
         let selectedItemIds = new Set();
+        let gpsPickerMap = null;
+        let gpsPickerMarker = null;
 
         async function downloadFileFromUrl(url, filename, isPost = false, bodyData = null) {
             try {
@@ -1151,6 +1227,199 @@ HTML_CONTENT = """
                 }
             } catch (e) {
                 alert("Error downloading file: " + e.message);
+            }
+        }
+
+        function openGPSEditModal() {
+            if (!activePreviewItem) return;
+            
+            if (activeConnection && activeConnection.role !== 'admin') {
+                alert("You don't have permission to edit locations.");
+                return;
+            }
+            
+            document.getElementById('gps-edit-error').style.display = 'none';
+            document.getElementById('gps-edit-error').innerText = '';
+            document.getElementById('input-gps-search').value = '';
+            
+            let currentLat = "";
+            let currentLon = "";
+            if (activePreviewItem.gps && typeof activePreviewItem.gps.lat === 'number') {
+                currentLat = activePreviewItem.gps.lat;
+                currentLon = activePreviewItem.gps.lon;
+            }
+            
+            document.getElementById('input-gps-lat').value = currentLat;
+            document.getElementById('input-gps-lon').value = currentLon;
+            
+            document.getElementById('gps-edit-modal').classList.remove('hidden');
+            
+            // Give the browser a moment to render the modal before initializing the map
+            setTimeout(() => {
+                initGpsPickerMap(currentLat, currentLon);
+            }, 100);
+        }
+
+        function initGpsPickerMap(lat, lon) {
+            if (!gpsPickerMap) {
+                gpsPickerMap = L.map('gps-picker-map').setView([0, 0], 2);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    maxZoom: 19,
+                    attribution: '© OpenStreetMap'
+                }).addTo(gpsPickerMap);
+                
+                gpsPickerMap.on('click', function(e) {
+                    document.getElementById('input-gps-lat').value = e.latlng.lat.toFixed(6);
+                    document.getElementById('input-gps-lon').value = e.latlng.lng.toFixed(6);
+                    updateGpsPickerMarker(e.latlng.lat, e.latlng.lng);
+                });
+            }
+
+            // Force map to recalculate its size since it was hidden
+            gpsPickerMap.invalidateSize();
+
+            let initialLat = 0;
+            let initialLon = 0;
+            let zoomLevel = 2;
+
+            if (lat !== "" && lon !== "") {
+                initialLat = parseFloat(lat);
+                initialLon = parseFloat(lon);
+                zoomLevel = 13;
+            }
+
+            gpsPickerMap.setView([initialLat, initialLon], zoomLevel);
+            updateGpsPickerMarker(initialLat, initialLon);
+        }
+
+        function updateGpsPickerMarker(lat, lon) {
+            if (lat === 0 && lon === 0) {
+                if (gpsPickerMarker) {
+                    gpsPickerMap.removeLayer(gpsPickerMarker);
+                    gpsPickerMarker = null;
+                }
+                return;
+            }
+            
+            if (gpsPickerMarker) {
+                gpsPickerMarker.setLatLng([lat, lon]);
+            } else {
+                gpsPickerMarker = L.marker([lat, lon]).addTo(gpsPickerMap);
+            }
+        }
+
+        function updateGpsPickerFromInputs() {
+            const lat = parseFloat(document.getElementById('input-gps-lat').value);
+            const lon = parseFloat(document.getElementById('input-gps-lon').value);
+            
+            if (!isNaN(lat) && !isNaN(lon)) {
+                gpsPickerMap.setView([lat, lon], 13);
+                updateGpsPickerMarker(lat, lon);
+            }
+        }
+
+        async function searchLocationGPS() {
+            const query = document.getElementById('input-gps-search').value.trim();
+            if (!query) return;
+
+            try {
+                const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`);
+                const data = await response.json();
+
+                if (data && data.length > 0) {
+                    const result = data[0];
+                    const lat = parseFloat(result.lat);
+                    const lon = parseFloat(result.lon);
+
+                    document.getElementById('input-gps-lat').value = lat.toFixed(6);
+                    document.getElementById('input-gps-lon').value = lon.toFixed(6);
+                    
+                    gpsPickerMap.setView([lat, lon], 13);
+                    updateGpsPickerMarker(lat, lon);
+                } else {
+                    alert("Location not found.");
+                }
+            } catch (err) {
+                console.error("Error searching location:", err);
+                alert("Failed to search location. Check your internet connection.");
+            }
+        }
+
+        function closeGPSEditModal() {
+            document.getElementById('gps-edit-modal').classList.add('hidden');
+        }
+
+        async function saveGPSData() {
+            if (!activePreviewItem) return;
+            
+            const errDiv = document.getElementById('gps-edit-error');
+            const btn = document.getElementById('btn-save-gps');
+            
+            // Auto replace commas with dots
+            let latStr = document.getElementById('input-gps-lat').value.replace(',', '.').trim();
+            let lonStr = document.getElementById('input-gps-lon').value.replace(',', '.').trim();
+            
+            if (!latStr || !lonStr) {
+                errDiv.innerText = "Both Latitude and Longitude are required.";
+                errDiv.style.display = 'block';
+                return;
+            }
+            
+            const lat = parseFloat(latStr);
+            const lon = parseFloat(lonStr);
+            
+            if (isNaN(lat) || lat < -90 || lat > 90) {
+                errDiv.innerText = "Invalid Latitude. Must be a number between -90 and 90.";
+                errDiv.style.display = 'block';
+                return;
+            }
+            if (isNaN(lon) || lon < -180 || lon > 180) {
+                errDiv.innerText = "Invalid Longitude. Must be a number between -180 and 180.";
+                errDiv.style.display = 'block';
+                return;
+            }
+            
+            errDiv.style.display = 'none';
+            btn.innerText = "Saving...";
+            btn.disabled = true;
+            
+            try {
+                const res = await fetch(`${activeConnection.url}/api/items/${activePreviewItem.id}/gps`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-device-token': activeConnection.token
+                    },
+                    body: JSON.stringify({ lat: lat, lon: lon })
+                });
+                
+                if (res.ok) {
+                    const data = await res.json();
+                    activePreviewItem.gps = data.gps;
+                    
+                    document.getElementById('row-lightbox-gps').style.display = "block";
+                    document.getElementById('lbl-lightbox-gps').innerText = `${data.gps.lat.toFixed(5)}, ${data.gps.lon.toFixed(5)}`;
+                    
+                    if (typeof updateLightboxMinimap === 'function') {
+                        updateLightboxMinimap(data.gps.lat, data.gps.lon);
+                    }
+                    if (typeof getAddressFromCoords === 'function') {
+                        getAddressFromCoords(data.gps.lat, data.gps.lon);
+                    }
+                    
+                    loadGalleryData();
+                    closeGPSEditModal();
+                } else {
+                    const err = await res.json();
+                    errDiv.innerText = "Error: " + (err.detail || res.statusText);
+                    errDiv.style.display = 'block';
+                }
+            } catch (e) {
+                errDiv.innerText = "Connection error while updating location.";
+                errDiv.style.display = 'block';
+            } finally {
+                btn.innerText = "Save Location";
+                btn.disabled = false;
             }
         }
 
@@ -1360,11 +1629,13 @@ HTML_CONTENT = """
             document.getElementById('view-uploader').style.display = 'none';
             document.getElementById('view-remote').style.display = 'none';
             document.getElementById('view-server-inactive').style.display = 'none';
+            document.getElementById('view-map').style.display = 'none';
             
             document.getElementById('btn-nav-dashboard').classList.remove('nav-active');
             document.getElementById('btn-nav-config').classList.remove('nav-active');
             document.getElementById('btn-nav-mobile').classList.remove('nav-active');
             document.getElementById('btn-nav-gallery').classList.remove('nav-active');
+            document.getElementById('btn-nav-map').classList.remove('nav-active');
             document.getElementById('btn-nav-uploader').classList.remove('nav-active');
             document.getElementById('btn-nav-remote').classList.remove('nav-active');
             
@@ -1382,6 +1653,7 @@ HTML_CONTENT = """
                 if(viewId === 'view-mobile') generatePairing();
                 if(viewId === 'view-gallery') loadGalleryData();
                 if(viewId === 'view-uploader') populateContextDropdowns();
+                if(viewId === 'view-map') initMapExplorer();
             }
         }
 
@@ -1718,6 +1990,75 @@ HTML_CONTENT = """
             renderFilteredGallery();
         }
 
+        let lightboxMap = null;
+        let lightboxMarker = null;
+
+        function updateLightboxMinimap(lat, lon) {
+            const mapDiv = document.getElementById('lightbox-minimap');
+            if (!mapDiv) return;
+            mapDiv.style.display = 'block';
+            
+            setTimeout(() => {
+                try {
+                    if (!lightboxMap) {
+                        lightboxMap = L.map('lightbox-minimap', {
+                            zoomControl: false,
+                            attributionControl: false
+                        }).setView([lat, lon], 13);
+                        
+                        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(lightboxMap);
+                        
+                        lightboxMarker = L.marker([lat, lon]).addTo(lightboxMap);
+                    } else {
+                        lightboxMap.setView([lat, lon], 13);
+                        lightboxMarker.setLatLng([lat, lon]);
+                        lightboxMap.invalidateSize();
+                    }
+                } catch (e) {
+                    console.error("Error updating lightbox minimap:", e);
+                }
+            }, 200);
+        }
+
+        function hideLightboxMinimap() {
+            const mapDiv = document.getElementById('lightbox-minimap');
+            if (mapDiv) mapDiv.style.display = 'none';
+        }
+
+        async function getAddressFromCoords(lat, lon) {
+            const addrRow = document.getElementById('row-lightbox-address');
+            const addrLbl = document.getElementById('lbl-lightbox-address');
+            if (!addrLbl || !addrRow) return;
+            addrRow.style.display = 'block';
+            addrLbl.innerText = "Loading address...";
+            try {
+                const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&accept-language=es`, {
+                    headers: {
+                        'User-Agent': 'VaultIngestor/1.0'
+                    }
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data && data.display_name) {
+                        const address = data.address;
+                        const city = address.city || address.town || address.village || address.suburb || "";
+                        const country = address.country || "";
+                        let shortAddress = data.display_name;
+                        if (city && country) {
+                            shortAddress = `${city}, ${country}`;
+                        }
+                        addrLbl.innerText = shortAddress;
+                    } else {
+                        addrRow.style.display = 'none';
+                    }
+                } else {
+                    addrRow.style.display = 'none';
+                }
+            } catch (e) {
+                addrRow.style.display = 'none';
+            }
+        }
+
         // Lightbox Media Previewer
         async function openLightbox(item) {
             activePreviewItem = item;
@@ -1738,7 +2079,12 @@ HTML_CONTENT = """
             document.getElementById('lbl-lightbox-filename').innerText = itemName;
             document.getElementById('lbl-lightbox-date').innerText = item.timestamp ? item.timestamp.replace('T', ' ').substring(0, 19) : '--';
             document.getElementById('lbl-lightbox-size').innerText = 'Loading...';
+            
+            // Clear location details
             document.getElementById('row-lightbox-gps').style.display = "none";
+            document.getElementById('row-lightbox-address').style.display = "none";
+            document.getElementById('lightbox-minimap').style.display = "none";
+            document.getElementById('lbl-lightbox-address').innerText = "--";
             
             // Download button configuration
             const dlBtn = document.getElementById('btn-lightbox-download');
@@ -1758,6 +2104,10 @@ HTML_CONTENT = """
                     if (info.gps) {
                         document.getElementById('row-lightbox-gps').style.display = "block";
                         document.getElementById('lbl-lightbox-gps').innerText = `${info.gps.lat.toFixed(5)}, ${info.gps.lon.toFixed(5)}`;
+                        updateLightboxMinimap(info.gps.lat, info.gps.lon);
+                        getAddressFromCoords(info.gps.lat, info.gps.lon);
+                    } else {
+                        hideLightboxMinimap();
                     }
                 }
             } catch (err) {}
@@ -1792,6 +2142,7 @@ HTML_CONTENT = """
             video.pause();
             video.src = "";
             activePreviewItem = null;
+            hideLightboxMinimap();
         }
 
         async function triggerLocalOpen() {
@@ -2039,10 +2390,144 @@ HTML_CONTENT = """
             if (localServerActive) updateStats();
         }, 5000);
         
+        let explorerMap = null;
+        let explorerMarkerCluster = null;
+
+        function initMapExplorer() {
+            const mapContainer = document.getElementById('main-map');
+            if (!mapContainer) return;
+            
+            setTimeout(() => {
+                try {
+                    if (!explorerMap) {
+                        // Create Leaflet map centered at world center
+                        explorerMap = L.map('main-map', {
+                            zoomControl: true,
+                            attributionControl: true
+                        }).setView([20, 0], 2);
+                        
+                        // CartoDB Dark Matter tile layer for premium dark mode aesthetics
+                        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+                            subdomains: 'abcd',
+                            maxZoom: 20
+                        }).addTo(explorerMap);
+                    }
+                    
+                    explorerMap.invalidateSize();
+                    loadMapData();
+                } catch (e) {
+                    console.error("Error initializing Map Explorer:", e);
+                }
+            }, 100);
+        }
+
+        async function loadMapData() {
+            if (!activeConnection || !explorerMap) return;
+            
+            // Clean existing markers
+            if (explorerMarkerCluster) {
+                explorerMap.removeLayer(explorerMarkerCluster);
+            }
+            
+            // Initialize cluster group with beautiful styled numbers
+            explorerMarkerCluster = L.markerClusterGroup({
+                showCoverageOnHover: false,
+                iconCreateFunction: function (cluster) {
+                    const childCount = cluster.getChildCount();
+                    return L.divIcon({
+                        html: `<div class="bg-blue-600 text-white rounded-full flex items-center justify-center font-bold border-2 border-blue-400 shadow-lg shadow-blue-500/30" style="width: 44px; height: 44px; line-height: 40px; text-align: center; font-size: 14px;">${childCount}</div>`,
+                        className: 'custom-cluster-icon',
+                        iconSize: L.point(44, 44)
+                    });
+                }
+            });
+            
+            try {
+                // Fetch items list
+                const response = await fetchWithTimeout(`${activeConnection.url}/api/items`, {
+                    headers: { 'x-device-token': activeConnection.token },
+                    timeout: 5000
+                });
+                
+                if (!response.ok) throw new Error("Could not fetch items");
+                
+                const items = await response.json();
+                
+                // Add geo-tagged markers
+                let hasGeoItems = false;
+                let latSum = 0;
+                let lonSum = 0;
+                let geoCount = 0;
+                
+                items.forEach(item => {
+                    if (item.gps && typeof item.gps.lat === 'number' && typeof item.gps.lon === 'number') {
+                        hasGeoItems = true;
+                        latSum += item.gps.lat;
+                        lonSum += item.gps.lon;
+                        geoCount++;
+                        
+                        const thumbUrl = `${activeConnection.url}/api/media/thumbnail/${item.id}?token=${activeConnection.token}`;
+                        const lastDot = item.name.lastIndexOf('.');
+                        const ext = lastDot !== -1 ? item.name.substring(lastDot).toLowerCase() : '';
+                        const isImage = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.heic', '.heif'].includes(ext);
+                        const isVideo = ['.mp4', '.mov', '.avi', '.mkv'].includes(ext);
+                        
+                        let markerIcon;
+                        if (isImage || isVideo) {
+                            markerIcon = L.divIcon({
+                                html: `
+                                    <div class="relative w-12 h-12 rounded-full border-2 border-blue-500 shadow-lg shadow-blue-500/20 overflow-hidden bg-slate-900 flex items-center justify-center hover:scale-110 transition-transform duration-200">
+                                        <img src="${thumbUrl}" class="w-full h-full object-cover select-none">
+                                        ${isVideo ? `
+                                            <div class="absolute inset-0 flex items-center justify-center bg-black/40">
+                                                <svg class="w-5 h-5 text-white fill-current" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                                            </div>
+                                        ` : ''}
+                                    </div>
+                                `,
+                                className: 'custom-marker-icon',
+                                iconSize: L.point(48, 48),
+                                iconAnchor: L.point(24, 24)
+                            });
+                        } else {
+                            markerIcon = L.divIcon({
+                                html: `
+                                    <div class="w-12 h-12 rounded-full bg-slate-800 border-2 border-slate-600 flex items-center justify-center shadow-lg hover:scale-110 transition-transform duration-200">
+                                        <svg class="w-6 h-6 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                                    </div>
+                                `,
+                                className: 'custom-marker-icon',
+                                iconSize: L.point(48, 48),
+                                iconAnchor: L.point(24, 24)
+                            });
+                        }
+                        
+                        const marker = L.marker([item.gps.lat, item.gps.lon], { icon: markerIcon });
+                        marker.on('click', () => {
+                            openLightbox(item);
+                        });
+                        
+                        explorerMarkerCluster.addLayer(marker);
+                    }
+                });
+                
+                explorerMap.addLayer(explorerMarkerCluster);
+                
+                // Adjust map bounds if there are geo-tagged items
+                if (hasGeoItems && geoCount > 0) {
+                    const bounds = explorerMarkerCluster.getBounds();
+                    explorerMap.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
+                }
+            } catch (e) {
+                console.error("Error loading map data:", e);
+            }
+        }
+
         setInterval(() => {
             if (localServerActive) fetchLogs();
         }, 5000);
-        
+
         window.onload = async () => {
              addLog("Initializing Vault Ingestor Desktop Hub...");
              

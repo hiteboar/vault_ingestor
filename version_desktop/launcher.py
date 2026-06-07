@@ -55,16 +55,7 @@ def get_github_token():
     if token_file.exists():
         return token_file.read_text().strip()
     
-    # Prompt user
-    root = tk.Tk()
-    root.withdraw() # Hide the main window
-    token = simpledialog.askstring("Vault Ingestor", "The repository seems to be private.\nPlease enter a GitHub Personal Access Token (PAT):", show='*')
-    root.destroy()
-    
-    if token:
-        token = token.strip()
-        token_file.write_text(token)
-        return token
+    # DEV OVERRIDE: Skip the token prompt to prevent blocking local development testing
     return None
 
 def get_headers():

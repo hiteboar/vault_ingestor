@@ -23,6 +23,11 @@ except ImportError:
     exifread = None
 
 try:
+    import piexif
+except ImportError:
+    piexif = None
+
+try:
     from pillow_heif import register_heif_opener
     register_heif_opener()
 except ImportError:
@@ -317,6 +322,95 @@ def extract_timestamp(file_path: Path) -> str:
     except:
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+def extract_gps(file_path: Path) -> Optional[dict]:
+    """Extracts GPS coordinates (latitude, longitude) from an image or video."""
+    ext = file_path.suffix.lower()
+    try:
+        if ext in {".jpg", ".jpeg", ".png", ".webp"}:
+            from PIL import Image as PILImage
+            from PIL.ExifTags import TAGS, GPSTAGS
+            with PILImage.open(file_path) as img:
+                exif = img._getexif()
+                if exif and 34853 in exif: # GPSInfo
+                    gps_info = {}
+                    for key, val in exif[34853].items():
+                        decode = GPSTAGS.get(key, key)
+                        gps_info[decode] = val
+                    if "GPSLatitude" in gps_info and "GPSLongitude" in gps_info:
+                        def parse_dms(dms, ref):
+                            try:
+                                dec = float(dms[0]) + float(dms[1])/60 + float(dms[2])/3600
+                                return -dec if ref in ['S', 'W'] else dec
+                            except Exception as e:
+                                print(f"[GPS_DMS_ERROR] Error parsing DMS {dms} Ref {ref}: {e}")
+                                raise e
+                        try:
+                            lat = parse_dms(gps_info["GPSLatitude"], gps_info.get("GPSLatitudeRef", "N"))
+                            lon = parse_dms(gps_info["GPSLongitude"], gps_info.get("GPSLongitudeRef", "E"))
+                            return {"lat": lat, "lon": lon}
+                        except Exception as e:
+                            print(f"[GPS_PARSE_ERROR] Error parsing GPS coords: {e}")
+        elif ext in {".mp4", ".mov", ".avi", ".mkv"}:
+            import subprocess
+            import re
+            cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", str(file_path)]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                meta = json.loads(result.stdout)
+                tags = meta.get("format", {}).get("tags", {})
+                loc = tags.get("location") or tags.get("com.apple.quicktime.location.ISO6709")
+                if loc:
+                    match = re.search(r'([+-]\d+\.\d+)([+-]\d+\.\d+)', str(loc))
+                    if match:
+                        return {"lat": float(match.group(1)), "lon": float(match.group(2))}
+    except Exception as e:
+        print(f"[GPS_EXTRACT_ERROR] Could not extract GPS for {file_path.name}: {e}")
+    return None
+
+def decimal_to_dms(decimal: float):
+    """Converts decimal degrees to piexif DMS tuple format ((deg, 1), (min, 1), (sec, 100))."""
+    degrees = int(abs(decimal))
+    minutes = int((abs(decimal) - degrees) * 60)
+    seconds = round(((abs(decimal) - degrees) * 60 - minutes) * 60 * 100)
+    return ((degrees, 1), (minutes, 1), (seconds, 100))
+
+def update_physical_gps(file_path: Path, lat: float, lon: float):
+    """Updates EXIF GPS coordinates preserving filesystem modification times."""
+    if file_path.suffix.lower() not in {".jpg", ".jpeg", ".webp", ".tif", ".tiff"}:
+        return False
+        
+    try:
+        import os
+        if piexif is None:
+            return False
+            
+        stat_info = file_path.stat()
+        original_atime = stat_info.st_atime
+        original_mtime = stat_info.st_mtime
+        
+        try:
+            exif_dict = piexif.load(str(file_path))
+        except piexif.InvalidImageDataError:
+            exif_dict = {"0th": {}, "Exif": {}, "GPS": {}, "Interop": {}, "1st": {}, "thumbnail": None}
+            
+        if "GPS" not in exif_dict:
+            exif_dict["GPS"] = {}
+            
+        exif_dict["GPS"][piexif.GPSIFD.GPSLatitudeRef] = b'N' if lat >= 0 else b'S'
+        exif_dict["GPS"][piexif.GPSIFD.GPSLatitude] = decimal_to_dms(lat)
+        exif_dict["GPS"][piexif.GPSIFD.GPSLongitudeRef] = b'E' if lon >= 0 else b'W'
+        exif_dict["GPS"][piexif.GPSIFD.GPSLongitude] = decimal_to_dms(lon)
+        exif_dict["GPS"][piexif.GPSIFD.GPSVersionID] = (2, 2, 0, 0)
+        
+        exif_bytes = piexif.dump(exif_dict)
+        piexif.insert(exif_bytes, str(file_path))
+        
+        os.utime(file_path, (original_atime, original_mtime))
+        return True
+    except Exception as e:
+        print(f"[GPS_UPDATE_ERROR] Error updating EXIF for {file_path.name}: {e}")
+        return False
+
 class MetadataManager:
     def __init__(self):
         self._cache = {}
@@ -538,6 +632,10 @@ class ConfigUpdate(BaseModel):
     key: str
     value: str
 
+class LocationUpdate(BaseModel):
+    lat: float
+    lon: float
+
 class PinVerify(BaseModel):
     pin: str
 
@@ -679,6 +777,7 @@ async def get_items(x_device_token: str = Header(...)):
     allowed_folders = device.get("allowed_folders", [])
 
     items = []
+    cache_modified = False
     try:
         for item in list(metadata_cache._cache.values()):
             try:
@@ -708,6 +807,13 @@ async def get_items(x_device_token: str = Header(...)):
                 if "context" not in item:
                     item["context"] = "root"
 
+                # Extract GPS on the fly if not already scanned
+                if "gps" not in item and not item.get("gps_scanned", False):
+                    gps_data = extract_gps(saved_path)
+                    item["gps"] = gps_data
+                    item["gps_scanned"] = True
+                    cache_modified = True
+
                 # Generate web_path relative to STORAGE or BASE
                 try:
                     # Try relative to storage first (most common)
@@ -724,6 +830,16 @@ async def get_items(x_device_token: str = Header(...)):
                 items.append(item)
             except Exception:
                 continue
+                
+        # If cache was updated, save it back to META_LOG
+        if cache_modified:
+            try:
+                with open(META_LOG, "w", encoding="utf-8") as f:
+                    for val in metadata_cache._cache.values():
+                        f.write(json.dumps(val) + "\n")
+            except Exception as write_err:
+                print(f"[GPS_WRITE_ERROR] Failed to save GPS updates to log: {write_err}")
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
@@ -755,16 +871,21 @@ async def get_item_info(item_id: str, x_device_token: str = Header(...)):
     }
     
     # Always try a fresh extraction of ACTUAL METADATA to ensure the most accurate date is shown
-    # If the file has no embedded EXIF/FFprobe/filename date, we keep the existing timestamp
-    # instead of falling back to the server's file modification time.
     fresh_ts = extract_metadata_timestamp(orig_path)
+    meta_modified = False
     
-    # If the fresh extraction is different from what we had in meta, update the log/cache
     if fresh_ts and fresh_ts != item_meta.get("timestamp"):
         item_meta["timestamp"] = fresh_ts
-        metadata_cache.update(item_meta)
+        meta_modified = True
         
-        # Update the log file immediately
+    if "gps" not in item_meta and not item_meta.get("gps_scanned", False):
+        gps_data = extract_gps(orig_path)
+        item_meta["gps"] = gps_data
+        item_meta["gps_scanned"] = True
+        meta_modified = True
+        
+    if meta_modified:
+        metadata_cache.update(item_meta)
         try:
             remaining_lines = []
             with open(META_LOG, "r", encoding="utf-8") as f:
@@ -772,7 +893,9 @@ async def get_item_info(item_id: str, x_device_token: str = Header(...)):
                     if line.strip():
                         m = json.loads(line)
                         if m.get("id") == item_id:
-                            m["timestamp"] = fresh_ts
+                            m["timestamp"] = item_meta["timestamp"]
+                            m["gps"] = item_meta.get("gps")
+                            m["gps_scanned"] = True
                             remaining_lines.append(json.dumps(m) + "\n")
                         else:
                             remaining_lines.append(line)
@@ -782,53 +905,57 @@ async def get_item_info(item_id: str, x_device_token: str = Header(...)):
             pass
             
     info["timestamp"] = item_meta.get("timestamp")
+    info["gps"] = item_meta.get("gps")
     
-    try:
-        ext = orig_path.suffix.lower()
-        if ext in {".jpg", ".jpeg", ".png", ".webp"}:
-            from PIL import Image as PILImage
-            from PIL.ExifTags import TAGS, GPSTAGS
-            with PILImage.open(orig_path) as img:
-                exif = img._getexif()
-                if exif:
-                    for tag_id, value in exif.items():
-                        tag = TAGS.get(tag_id, tag_id)
-                        if tag == 'DateTimeOriginal' and value:
-                            pass
-                    
-                    gps_info = {}
-                    if 34853 in exif: # GPSInfo
-                        for key, val in exif[34853].items():
-                            decode = GPSTAGS.get(key, key)
-                            gps_info[decode] = val
-                    if "GPSLatitude" in gps_info and "GPSLongitude" in gps_info:
-                        def parse_dms(dms, ref):
-                            dec = float(dms[0]) + float(dms[1])/60 + float(dms[2])/3600
-                            return -dec if ref in ['S', 'W'] else dec
-                        try:
-                            lat = parse_dms(gps_info["GPSLatitude"], gps_info.get("GPSLatitudeRef", "N"))
-                            lon = parse_dms(gps_info["GPSLongitude"], gps_info.get("GPSLongitudeRef", "E"))
-                            info["gps"] = {"lat": lat, "lon": lon}
-                        except Exception as e:
-                            print(f"Error parsing GPS: {e}")
-        elif ext in {".mp4", ".mov", ".avi", ".mkv"}:
-            import subprocess
-            import re
-            cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", str(orig_path)]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode == 0:
-                meta = json.loads(result.stdout)
-                tags = meta.get("format", {}).get("tags", {})
-                
-                loc = tags.get("location") or tags.get("com.apple.quicktime.location.ISO6709")
-                if loc:
-                    match = re.search(r'([+-]\d+\.\d+)([+-]\d+\.\d+)', str(loc))
-                    if match:
-                        info["gps"] = {"lat": float(match.group(1)), "lon": float(match.group(2))}
-    except Exception as e:
-        print(f"[INFO_ERROR] Could not extract metadata for {orig_path.name}: {e}")
-
     return info
+
+@app.put("/api/items/{item_id}/gps")
+async def update_item_gps(item_id: str, data: LocationUpdate, x_device_token: str = Header(...)):
+    """Updates the GPS location of an item in the metadata DB and physical file (if supported)."""
+    device = auth.get_device_info(x_device_token)
+    if not device:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    item_meta = metadata_cache.get_item(item_id)
+    if not item_meta:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    role = device.get("role", "standard")
+    allowed_folders = device.get("allowed_folders", [])
+    context = item_meta.get("context", "root")
+
+    if role != "admin" and context not in allowed_folders and "*" not in allowed_folders:
+        raise HTTPException(status_code=403, detail="No permission to edit this item")
+
+    # Update in memory cache
+    item_meta["gps"] = {"lat": data.lat, "lon": data.lon}
+    item_meta["gps_scanned"] = True
+    metadata_cache.update(item_meta)
+
+    # Rewrite the whole log file safely
+    try:
+        remaining_lines = []
+        with open(META_LOG, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    m = json.loads(line)
+                    if m.get("id") == item_id:
+                        m["gps"] = item_meta["gps"]
+                        m["gps_scanned"] = True
+                    remaining_lines.append(json.dumps(m) + "\n")
+        with open(META_LOG, "w", encoding="utf-8") as f:
+            f.writelines(remaining_lines)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save metadata: {e}")
+
+    # Try to update physical EXIF if supported
+    saved_path_str = item_meta.get("saved_path")
+    if saved_path_str:
+        file_path = Path(saved_path_str)
+        if file_path.exists():
+            update_physical_gps(file_path, data.lat, data.lon)
+
+    return {"status": "success", "gps": item_meta["gps"]}
 
 @app.get("/api/system/status")
 async def get_system_status():
@@ -1232,13 +1359,16 @@ async def upload_file(
             final_timestamp = "1970-01-01T00:00:00Z"
 
 
+        gps_data = extract_gps(file_path)
         item = {
             "id": secrets.token_hex(8),
             "name": file.filename,
             "saved_path": str(file_path),
             "timestamp": final_timestamp,
             "source": "mobile",
-            "context": context
+            "context": context,
+            "gps": gps_data,
+            "gps_scanned": True
         }
         with open(META_LOG, "a", encoding="utf-8") as f:
             f.write(json.dumps(item) + "\n")
@@ -1464,16 +1594,38 @@ async def download_folder(
 class BatchDownloadRequest(BaseModel):
     ids: List[str]
 
+class ZipStreamer:
+    def __init__(self):
+        import io
+        self.buffer = io.BytesIO()
+        self.offset = 0
+
+    def write(self, data):
+        self.buffer.write(data)
+        self.offset += len(data)
+
+    def tell(self):
+        return self.offset
+
+    def flush(self):
+        pass
+
+    def get_data(self):
+        import io
+        data = self.buffer.getvalue()
+        self.buffer = io.BytesIO()
+        return data
+
 @app.post("/api/items/batch-download")
-async def batch_download(
+def batch_download(
     req: BatchDownloadRequest,
-    background_tasks: BackgroundTasks,
     x_device_token: str = Header(...)
 ):
-    """Zips selected items by ID and returns the consolidated archive."""
-    import tempfile
+    """Zips selected items by ID and streams the consolidated archive."""
     import zipfile
-    
+    import io
+    from fastapi.responses import StreamingResponse
+
     device = auth.get_device_info(x_device_token)
     if not device:
         raise HTTPException(status_code=401, detail="Invalid token")
@@ -1521,15 +1673,10 @@ async def batch_download(
     if not files_to_zip:
         raise HTTPException(status_code=400, detail="No valid files selected for download")
         
-    try:
-        temp_dir = STORAGE_DIR / "_tmp"
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        
-        zip_fd, zip_path_str = tempfile.mkstemp(suffix=".zip", dir=str(temp_dir))
-        os.close(zip_fd)
-        
+    def zip_generator():
+        stream = ZipStreamer()
         name_counts = {}
-        with zipfile.ZipFile(zip_path_str, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        with zipfile.ZipFile(stream, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
             for file_path, name in files_to_zip:
                 base, ext = os.path.splitext(name)
                 if name in name_counts:
@@ -1538,16 +1685,37 @@ async def batch_download(
                 else:
                     name_counts[name] = 0
                     arcname = name
-                zip_file.write(file_path, arcname)
                 
-        background_tasks.add_task(remove_temp_file, zip_path_str)
-        return FileResponse(
-            zip_path_str,
-            media_type="application/zip",
-            filename="vault_selection.zip"
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+                try:
+                    with zf.open(arcname, "w") as dest_f:
+                        with open(file_path, "rb") as src_f:
+                            while True:
+                                chunk = src_f.read(65536) # 64KB chunks
+                                if not chunk:
+                                    break
+                                dest_f.write(chunk)
+                                zip_data = stream.get_data()
+                                if zip_data:
+                                    yield zip_data
+                    zip_data = stream.get_data()
+                    if zip_data:
+                        yield zip_data
+                except Exception as file_err:
+                    print(f"[ZIP_STREAM_ERROR] Failed to write {file_path.name} to zip: {file_err}")
+                    continue
+                    
+        zip_data = stream.get_data()
+        if zip_data:
+            yield zip_data
+            
+    headers = {
+        "Content-Disposition": 'attachment; filename="vault_selection.zip"'
+    }
+    return StreamingResponse(
+        zip_generator(),
+        media_type="application/zip",
+        headers=headers
+    )
 
 class BatchDeleteRequest(BaseModel):
     ids: List[str]
