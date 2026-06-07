@@ -353,14 +353,6 @@ export default function App() {
               if (!originalDate && asset.creationTime) {
                   originalDate = new Date(asset.creationTime * (asset.creationTime > 1e11 ? 1 : 1000)).toISOString();
               }
-              if (!originalDate) {
-                  try {
-                      const fileInfo = await FileSystem.getInfoAsync(asset.uri);
-                      if (fileInfo && fileInfo.modificationTime) {
-                          originalDate = new Date(fileInfo.modificationTime * 1000).toISOString();
-                      }
-                  } catch (err) {}
-              }
                   
               await api.uploadFile(asset.uri, filename, mimeType, currentFolder, originalDate, (pct) => {
                   setUploadState(prev => ({ ...prev, percent: pct }));
@@ -424,30 +416,6 @@ export default function App() {
               // 0. Use the native contentDate resolved via ContentResolver if available
               if (asset.contentDate) {
                   originalDate = asset.contentDate;
-              }
-              
-              // 1. Try to get the original modification time from the content provider URI
-              if (!originalDate && asset.contentUri) {
-                  try {
-                      const fileInfo = await FileSystem.getInfoAsync(asset.contentUri);
-                      if (fileInfo && fileInfo.modificationTime) {
-                          originalDate = new Date(fileInfo.modificationTime * 1000).toISOString();
-                      }
-                  } catch (err) {
-                      // Ignore errors reading contentUri
-                  }
-              }
-
-              // 2. If we couldn't get the date from contentUri, fall back to the cache file's modification time.
-              // This is better than passing null (which would default to 1970 on the backend if EXIF is missing).
-              if (!originalDate && asset.path) {
-                  try {
-                      const fallbackPath = asset.path.startsWith('file://') ? asset.path : `file://${asset.path}`;
-                      const fileInfo = await FileSystem.getInfoAsync(fallbackPath);
-                      if (fileInfo && fileInfo.modificationTime) {
-                          originalDate = new Date(fileInfo.modificationTime * 1000).toISOString();
-                      }
-                  } catch (err) {}
               }
               
               // ALWAYS upload the cached file (asset.path) to prevent permission/read errors with FormData
