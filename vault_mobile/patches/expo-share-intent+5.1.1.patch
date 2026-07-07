@@ -1,44 +1,64 @@
 diff --git a/node_modules/expo-share-intent/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt b/node_modules/expo-share-intent/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-index 0153c89..03ef079 100644
+index 0153c89..b54e74a 100644
 --- a/node_modules/expo-share-intent/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
 +++ b/node_modules/expo-share-intent/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-@@ -70,6 +70,35 @@ class ExpoShareIntentModule : Module() {
-             queryResult.moveToFirst()
-             val fileName = queryResult.getString(queryResult.getColumnIndex(OpenableColumns.DISPLAY_NAME))
-             val fileSize = queryResult.getString(queryResult.getColumnIndex(OpenableColumns.SIZE))
-+            
+@@ -66,13 +66,49 @@ class ExpoShareIntentModule : Module() {
+                     "filePath" to instance?.getAbsolutePath(uri),
+                 )
+             }
+-            val queryResult: Cursor = resolver.query(uri, null, null, null, null)!!
+-            queryResult.moveToFirst()
+-            val fileName = queryResult.getString(queryResult.getColumnIndex(OpenableColumns.DISPLAY_NAME))
+-            val fileSize = queryResult.getString(queryResult.getColumnIndex(OpenableColumns.SIZE))
+-            queryResult.close()
++            var fileName: String? = null
++            var fileSize: String? = null
 +            var contentDate: String? = null
-+            try {
-+                val dateColumns = arrayOf("datetaken", "date_modified", "date_added")
-+                for (col in dateColumns) {
-+                    val idx = queryResult.getColumnIndex(col)
-+                    if (idx != -1) {
-+                        val valStr = queryResult.getString(idx)
-+                        if (!valStr.isNullOrEmpty() && valStr != "0") {
-+                            var timeMs = valStr.toLongOrNull() ?: 0L
-+                            if (timeMs > 0L) {
-+                                if (col == "date_modified" || col == "date_added") {
-+                                    if (timeMs < 1000000000000L) {
-+                                        timeMs *= 1000L
++            val queryResult: Cursor? = resolver.query(uri, null, null, null, null)
++            if (queryResult != null && queryResult.moveToFirst()) {
++                try {
++                    val nameIdx = queryResult.getColumnIndex(OpenableColumns.DISPLAY_NAME)
++                    if (nameIdx != -1) fileName = queryResult.getString(nameIdx)
++                } catch (e: Exception) {}
++                
++                try {
++                    val sizeIdx = queryResult.getColumnIndex(OpenableColumns.SIZE)
++                    if (sizeIdx != -1) fileSize = queryResult.getString(sizeIdx)
++                } catch (e: Exception) {}
++                
++                try {
++                    val dateColumns = arrayOf("datetaken", "date_modified", "date_added", "last_modified")
++                    for (col in dateColumns) {
++                        val idx = queryResult.getColumnIndex(col)
++                        if (idx != -1) {
++                            val valStr = queryResult.getString(idx)
++                            if (!valStr.isNullOrEmpty() && valStr != "0") {
++                                var timeMs = valStr.toLongOrNull() ?: 0L
++                                if (timeMs > 0L) {
++                                    if (col == "date_modified" || col == "date_added" || col == "last_modified") {
++                                        if (timeMs < 1000000000000L) timeMs *= 1000L
 +                                    }
++                                    val date = java.util.Date(timeMs)
++                                    val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
++                                    sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
++                                    contentDate = sdf.format(date)
++                                    break
 +                                }
-+                                val date = java.util.Date(timeMs)
-+                                val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
-+                                sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
-+                                contentDate = sdf.format(date)
-+                                break
 +                            }
 +                        }
 +                    }
++                } catch (e: Exception) {
++                    // Ignore any error in date parsing to prevent crash
 +                }
-+            } catch (e: Exception) {
-+                // Ignore any error in date parsing to prevent crash
++                queryResult.close()
 +            }
-+            
-             queryResult.close()
  
-             val mimeType = resolver.getType(uri)!!
-@@ -107,7 +136,8 @@ class ExpoShareIntentModule : Module() {
+-            val mimeType = resolver.getType(uri)!!
++            val mimeType = resolver.getType(uri) ?: "application/octet-stream"
+ 
+             var mediaWidth: String? = null;
+             var mediaHeight: String? = null;
+@@ -107,7 +143,8 @@ class ExpoShareIntentModule : Module() {
                      "mimeType" to mimeType,
                      "width" to mediaWidth,
                      "height" to mediaHeight,

@@ -13,7 +13,8 @@ import {
   Dimensions,
   Modal,
   Alert,
-  PanResponder
+  PanResponder,
+  ScrollView
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -82,6 +83,7 @@ export default function App() {
   // Share Intent state
   const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntent();
   const [showShareModal, setShowShareModal] = useState(false);
+  const [shareFiles, setShareFiles] = useState([]);
   const [shareUploadState, setShareUploadState] = useState({ active: false, current: 0, total: 0, percent: 0 });
   const [selectedShareFolder, setSelectedShareFolder] = useState('root');
   
@@ -128,6 +130,11 @@ export default function App() {
         return;
       }
       setSelectedShareFolder(currentFolder === 'root' ? 'root' : currentFolder);
+      const filesWithDates = shareIntent.files.map(file => ({
+          ...file,
+          customDate: file.contentDate || ''
+      }));
+      setShareFiles(filesWithDates);
       setShowShareModal(true);
     }
   }, [hasShareIntent, shareIntent, connected]);
@@ -306,6 +313,7 @@ export default function App() {
 
       setUploadState({ active: true, current: 0, total: assets.length, percent: 0 });
       let successCount = 0;
+      let anyFallback = false;
       
       for (let i = 0; i < assets.length; i++) {
           const asset = assets[i];
@@ -354,9 +362,10 @@ export default function App() {
                   originalDate = new Date(asset.creationTime * (asset.creationTime > 1e11 ? 1 : 1000)).toISOString();
               }
                   
-              await api.uploadFile(asset.uri, filename, mimeType, currentFolder, originalDate, (pct) => {
+              const resp = await api.uploadFile(asset.uri, filename, mimeType, currentFolder, originalDate, (pct) => {
                   setUploadState(prev => ({ ...prev, percent: pct }));
               });
+              if (resp && resp.fallback_used) anyFallback = true;
               successCount++;
           } catch(e) {
               alert(`Error uploading ${filename}: ${e.message}`);
@@ -366,19 +375,26 @@ export default function App() {
       setUploadState({ active: false, current: 0, total: 0, percent: 0 });
       loadData();
       if (successCount > 0 && successCount < assets.length) {
-          alert(`Uploaded ${successCount} of ${assets.length} files successfully.`);
+          if (anyFallback) {
+              Alert.alert("Carga parcial con advertencias", `Se subieron ${successCount} de ${assets.length} archivos, pero algunos se registraron con la fecha actual.`);
+          } else {
+              alert(`Uploaded ${successCount} of ${assets.length} files successfully.`);
+          }
+      } else if (successCount === assets.length && anyFallback) {
+          Alert.alert("Carga con advertencias", "Todos los archivos se subieron, pero algunos no contenían fecha original y se registraron con la actual.");
       }
-  };
-
-  const handleShareUpload = async () => {
-      if (!shareIntent || !shareIntent.files || shareIntent.files.length === 0) return;
+  };  const handleShareUpload = async () => {
+      if (!shareFiles || shareFiles.length === 0) return;
       
-      const assets = shareIntent.files;
+      const assets = shareFiles;
       setShareUploadState({ active: true, current: 0, total: assets.length, percent: 0 });
-      let successCount = 0;       for (let i = 0; i < assets.length; i++) {
+      let successCount = 0;
+      let anyFallback = false;
+      
+      for (let i = 0; i < assets.length; i++) {
           const asset = assets[i];
           const mimeType = asset.mimeType || asset.type || 'application/octet-stream';
-          let filename = asset.fileName || asset.path.split('/').pop() || `shared_${Date.now()}.bin`;
+          let filename = asset.fileName || (asset.path ? asset.path.split('/').pop() : null) || `shared_${Date.now()}.bin`;
           
           // Ensure filename has a valid extension if we know the mimeType
           if (!filename.includes('.') || filename.endsWith('.tmp') || filename.endsWith('.bin')) {
@@ -411,17 +427,13 @@ export default function App() {
           setShareUploadState(prev => ({ ...prev, current: i + 1, percent: 0 }));
           
           try {
-              let originalDate = null;
-              
-              // 0. Use the native contentDate resolved via ContentResolver if available
-              if (asset.contentDate) {
-                  originalDate = asset.contentDate;
-              }
+              let originalDate = asset.customDate || null;
               
               // ALWAYS upload the cached file (asset.path) to prevent permission/read errors with FormData
-              const fileUriToUpload = asset.path.startsWith('file://') ? asset.path : `file://${asset.path}`;
+              const safePath = asset.path || '';
+              const fileUriToUpload = safePath.startsWith('file://') ? safePath : `file://${safePath}`;
 
-              await api.uploadFile(
+              const resp = await api.uploadFile(
                   fileUriToUpload, 
                   filename, 
                   mimeType, 
@@ -431,6 +443,7 @@ export default function App() {
                       setShareUploadState(prev => ({ ...prev, percent: pct }));
                   }
               );
+              if (resp && resp.fallback_used) anyFallback = true;
               successCount++;
           } catch(e) {
               alert(`Error uploading shared file ${filename}: ${e.message}`);
@@ -443,9 +456,17 @@ export default function App() {
       loadData();
       
       if (successCount === assets.length) {
-          Alert.alert("Success", "All shared files uploaded successfully!");
+          if (anyFallback) {
+              Alert.alert("Carga completada con advertencias", "Todos los archivos se subieron correctamente, pero algunos no contenían fecha original y se registraron con la actual.");
+          } else {
+              Alert.alert("Success", "All shared files uploaded successfully!");
+          }
       } else if (successCount > 0) {
-          Alert.alert("Partial Success", `Uploaded ${successCount} of ${assets.length} files successfully.`);
+          if (anyFallback) {
+              Alert.alert("Carga parcial con advertencias", `Se subieron ${successCount} de ${assets.length} archivos, pero algunos se registraron con la fecha actual.`);
+          } else {
+              Alert.alert("Partial Success", `Uploaded ${successCount} of ${assets.length} files successfully.`);
+          }
       }
   };
 
@@ -1317,34 +1338,45 @@ export default function App() {
                         <Text style={styles.promptTitle}>📥 Save Shared Files</Text>
                         <Text style={styles.promptSub}>Choose a folder destination in your Vault.</Text>
 
-                        {/* File preview and count */}
-                        {shareIntent.files && shareIntent.files.length > 0 && (
-                            <View style={{ backgroundColor: '#1e293b', padding: 12, borderRadius: 8, marginVertical: 15, width: '100%', flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                                {shareIntent.files[0].type?.startsWith('image') ? (
-                                    <Image 
-                                        source={{ uri: shareIntent.files[0].path }} 
-                                        style={{ width: 48, height: 48, borderRadius: 6, backgroundColor: '#0f172a' }}
-                                    />
-                                ) : (
-                                    <View style={{ width: 48, height: 48, borderRadius: 6, backgroundColor: '#0f172a', alignItems: 'center', justifyContent: 'center' }}>
-                                        <MaterialCommunityIcons name="file-document" size={24} color="#94a3b8" />
-                                    </View>
-                                )}
-                                <View style={{ flex: 1 }}>
-                                    <Text style={{ color: '#fff', fontSize: 13, fontWeight: 'bold' }} numberOfLines={1}>
-                                        {shareIntent.files[0].fileName || shareIntent.files[0].path.split('/').pop()}
-                                    </Text>
-                                    <Text style={{ color: '#64748b', fontSize: 11 }}>
-                                        {shareIntent.files.length > 1 ? `And ${shareIntent.files.length - 1} more file(s)` : 'Ready to upload'}
-                                    </Text>
-                                </View>
+                        {/* File previews with date editors */}
+                        {shareFiles && shareFiles.length > 0 && (
+                            <View style={{ maxHeight: 180, width: '100%', marginVertical: 10 }}>
+                                <ScrollView nestedScrollEnabled={true}>
+                                    {shareFiles.map((file, idx) => (
+                                        <View key={idx} style={{ backgroundColor: '#1e293b', padding: 10, borderRadius: 8, marginBottom: 8, width: '100%' }}>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                                                {file.mimeType?.startsWith('image') && file.path ? (
+                                                    <Image source={{ uri: file.path }} style={{ width: 32, height: 32, borderRadius: 4, marginRight: 10 }} />
+                                                ) : (
+                                                    <MaterialCommunityIcons name="file-document" size={32} color="#94a3b8" style={{ marginRight: 10 }} />
+                                                )}
+                                                <Text style={{ color: '#fff', fontSize: 12, flex: 1 }} numberOfLines={1}>
+                                                    {file.fileName || (file.path ? file.path.split('/').pop() : `shared_${Date.now()}.bin`)}
+                                                </Text>
+                                            </View>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                                <MaterialCommunityIcons name="calendar-edit" size={16} color="#64748b" style={{ marginRight: 5 }} />
+                                                <TextInput 
+                                                    style={{ flex: 1, backgroundColor: '#0f172a', color: '#fff', fontSize: 12, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6, borderWidth: 1, borderColor: '#334155' }}
+                                                    placeholder="Fecha (YYYY-MM-DD HH:MM:SS)"
+                                                    placeholderTextColor="#475569"
+                                                    value={file.customDate}
+                                                    onChangeText={(txt) => setShareFiles(prev => prev.map((f, i) => i === idx ? { ...f, customDate: txt } : f))}
+                                                />
+                                                <TouchableOpacity onPress={() => setShareFiles(prev => prev.map((f, i) => i === idx ? { ...f, customDate: '' } : f))} style={{ padding: 6, marginLeft: 5 }}>
+                                                    <MaterialCommunityIcons name="close-circle" size={16} color="#ef4444" />
+                                                </TouchableOpacity>
+                                            </View>
+                                        </View>
+                                    ))}
+                                </ScrollView>
                             </View>
                         )}
 
                         <Text style={{ color: '#94a3b8', fontSize: 12, fontWeight: 'bold', alignSelf: 'flex-start', marginBottom: 8 }}>Destination Folder:</Text>
 
                         {/* List folders */}
-                        <View style={{ maxHeight: 220, width: '100%', marginBottom: 20 }}>
+                        <View style={{ maxHeight: 150, width: '100%', marginBottom: 15 }}>
                             <FlatList 
                                 data={['root', ...new Set(items.map(i => i.context && i.context !== 'root' ? i.context : null).filter(f => f !== null))]}
                                 keyExtractor={(f) => f}

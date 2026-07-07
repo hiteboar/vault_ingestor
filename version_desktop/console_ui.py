@@ -2563,7 +2563,11 @@ if __name__ == "__main__":
     
     # Intercept closing: instead of destroying, hide the window (background mode)
     def on_closing():
-        win.hide()
+        def hide_window_async():
+            time.sleep(0.1)
+            win.hide()
+        
+        threading.Thread(target=hide_window_async, daemon=True).start()
         # Returns False to prevent pywebview from closing/destroying the window
         return False
         

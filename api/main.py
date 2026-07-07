@@ -1349,15 +1349,16 @@ async def upload_file(
         # Determine final timestamp
         # 1. Try to extract authentic metadata from file (EXIF/FFprobe/filename)
         final_timestamp = extract_metadata_timestamp(file_path, file.content_type)
+        fallback_used = False
         
         # 2. If no authentic metadata, prioritize original_date from the client if provided
         if not final_timestamp and original_date:
             final_timestamp = original_date
             
-        # 3. If still no timestamp, fallback to oldest possible date per user requirement
+        # 3. If still no timestamp, fallback to the current date/time (the upload time)
         if not final_timestamp:
-            final_timestamp = "1970-01-01T00:00:00Z"
-
+            final_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            fallback_used = True
 
         gps_data = extract_gps(file_path)
         item = {
@@ -1381,7 +1382,7 @@ async def upload_file(
         # Log Audit
         log_audit("UPLOAD", file_path, device)
             
-        return {"status": "success", "id": item["id"]}
+        return {"status": "success", "id": item["id"], "fallback_used": fallback_used, "timestamp": final_timestamp}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
