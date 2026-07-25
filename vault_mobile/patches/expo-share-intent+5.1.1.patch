@@ -1,8 +1,8 @@
 diff --git a/node_modules/expo-share-intent/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt b/node_modules/expo-share-intent/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-index 0153c89..8d7bf12 100644
+index 0153c89..8d391b8 100644
 --- a/node_modules/expo-share-intent/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
 +++ b/node_modules/expo-share-intent/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-@@ -66,13 +66,70 @@ class ExpoShareIntentModule : Module() {
+@@ -66,13 +66,201 @@ class ExpoShareIntentModule : Module() {
                      "filePath" to instance?.getAbsolutePath(uri),
                  )
              }
@@ -26,6 +26,7 @@ index 0153c89..8d7bf12 100644
 +                    if (sizeIdx != -1) fileSize = queryResult.getString(sizeIdx)
 +                } catch (e: Exception) {}
 +                
++                // Try to get dates from the URI's own cursor (works for some providers)
 +                try {
 +                    val dateColumns = arrayOf("datetaken", "date_modified", "date_added", "last_modified")
 +                    for (col in dateColumns) {
@@ -47,57 +48,199 @@ index 0153c89..8d7bf12 100644
 +                            }
 +                        }
 +                    }
-+                } catch (e: Exception) {
-+                    // Ignore any error in date parsing to prevent crash
-+                }
++                } catch (e: Exception) {}
 +                queryResult.close()
 +            }
 +
 +            val mimeType = resolver.getType(uri) ?: "application/octet-stream"
- 
--            val mimeType = resolver.getType(uri)!!
-+            // Try to extract original date from EXIF for images
++
++            // ============================================================
++            // KEY APPROACH: Read EXIF from the content:// stream for BOTH
++            // date AND GPS. The stream bytes are always the original image
++            // bytes regardless of Android caching. The cache only affects
++            // filesystem-level timestamps, NOT the binary EXIF data inside
++            // the image file itself.
++            // ============================================================
++            var exifDate: String? = null
++            var exifGpsLat: String? = null
++            var exifGpsLon: String? = null
++
 +            if (mimeType.startsWith("image/")) {
 +                try {
 +                    resolver.openInputStream(uri)?.use { inputStream ->
-+                        val exifInterface = android.media.ExifInterface(inputStream)
-+                        val dateString = exifInterface.getAttribute(android.media.ExifInterface.TAG_DATETIME_ORIGINAL)
-+                            ?: exifInterface.getAttribute(android.media.ExifInterface.TAG_DATETIME)
++                        val exif = android.media.ExifInterface(inputStream)
++
++                        // --- Extract date ---
++                        val dateString = exif.getAttribute(android.media.ExifInterface.TAG_DATETIME_ORIGINAL)
++                            ?: exif.getAttribute(android.media.ExifInterface.TAG_DATETIME)
++                            ?: exif.getAttribute(android.media.ExifInterface.TAG_DATETIME_DIGITIZED)
 +                        if (!dateString.isNullOrEmpty()) {
 +                            val cleanDate = dateString.trim().replace('\u0000', ' ')
 +                            val parts = cleanDate.split(" ".toRegex()).dropLastWhile { it.isEmpty() }.toTypedArray()
 +                            if (parts.size == 2) {
-+                                val formattedDate = "${parts[0].replace(':', '-')}T${parts[1]}Z"
-+                                contentDate = formattedDate
++                                exifDate = "${parts[0].replace(':', '-')}T${parts[1]}Z"
 +                            }
++                        }
++
++                        // --- Extract GPS (NEW - never attempted before) ---
++                        val latLong = FloatArray(2)
++                        if (exif.getLatLong(latLong)) {
++                            exifGpsLat = latLong[0].toString()
++                            exifGpsLon = latLong[1].toString()
 +                        }
 +                    }
 +                } catch (e: Exception) {
-+                    Log.e("ExpoShareIntentModule", "Error reading EXIF date: ${e.message}")
++                    Log.e("ExpoShareIntentModule", "Error reading EXIF from stream: ${e.message}")
 +                }
++            }
+ 
+-            val mimeType = resolver.getType(uri)!!
++            // Use EXIF date if found (highest priority — it's the actual capture date)
++            if (exifDate != null) {
++                contentDate = exifDate
++            }
++
++            // ============================================================
++            // PLAN C: If contentDate is still null (no EXIF, provider didn't
++            // expose date columns), query MediaStore by filename+size to get
++            // DATE COLUMNS (datetaken, date_modified, date_added).
++            //
++            // CRITICAL DIFFERENCE from previous Plan B:
++            // Plan B queried for "_data" (the file path) -> blocked by Scoped Storage
++            // Plan C queries for DATE COLUMNS -> always accessible, never blocked
++            // ============================================================
++            if (contentDate == null && !fileName.isNullOrEmpty()) {
++                val mediaUri = if (mimeType.startsWith("image/")) {
++                    android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
++                } else if (mimeType.startsWith("video/")) {
++                    android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI
++                } else {
++                    null
++                }
++
++                if (mediaUri != null) {
++                    var selection = android.provider.MediaStore.MediaColumns.DISPLAY_NAME + " = ?"
++                    var selectionArgs = arrayOf(fileName)
++                    if (fileSize != null) {
++                        selection += " AND " + android.provider.MediaStore.MediaColumns.SIZE + " = ?"
++                        selectionArgs = arrayOf(fileName, fileSize)
++                    }
++
++                    val dateProjection = arrayOf(
++                        "datetaken",
++                        android.provider.MediaStore.MediaColumns.DATE_MODIFIED,
++                        android.provider.MediaStore.MediaColumns.DATE_ADDED
++                    )
++
++                    try {
++                        val msCursor = resolver.query(mediaUri, dateProjection, selection, selectionArgs, null)
++                        if (msCursor != null && msCursor.moveToFirst()) {
++                            // Try datetaken first (milliseconds, most accurate)
++                            val takenIdx = msCursor.getColumnIndex("datetaken")
++                            if (takenIdx != -1) {
++                                val taken = msCursor.getLong(takenIdx)
++                                if (taken > 0) {
++                                    val date = java.util.Date(taken)
++                                    val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
++                                    sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
++                                    contentDate = sdf.format(date)
++                                }
++                            }
++                            // Fallback to date_modified (seconds)
++                            if (contentDate == null) {
++                                val modIdx = msCursor.getColumnIndex(android.provider.MediaStore.MediaColumns.DATE_MODIFIED)
++                                if (modIdx != -1) {
++                                    val mod = msCursor.getLong(modIdx)
++                                    if (mod > 0) {
++                                        val date = java.util.Date(mod * 1000L)
++                                        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
++                                        sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
++                                        contentDate = sdf.format(date)
++                                    }
++                                }
++                            }
++                            // Fallback to date_added (seconds)
++                            if (contentDate == null) {
++                                val addIdx = msCursor.getColumnIndex(android.provider.MediaStore.MediaColumns.DATE_ADDED)
++                                if (addIdx != -1) {
++                                    val added = msCursor.getLong(addIdx)
++                                    if (added > 0) {
++                                        val date = java.util.Date(added * 1000L)
++                                        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
++                                        sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
++                                        contentDate = sdf.format(date)
++                                    }
++                                }
++                            }
++                        }
++                        msCursor?.close()
++                    } catch (e: Exception) {
++                        Log.e("ExpoShareIntentModule", "MediaStore date query error: ${e.message}")
++                    }
++                }
++            }
++
++            // ============================================================
++            // LAST RESORT: Extract date from the filename pattern
++            // e.g. IMG_20230515_123456.jpg -> 2023-05-15T12:34:56Z
++            // ============================================================
++            if (contentDate == null && !fileName.isNullOrEmpty()) {
++                try {
++                    val fullPattern = Regex("(\\d{4})[_-]?(\\d{2})[_-]?(\\d{2})[_-]?(\\d{2})[_-]?(\\d{2})[_-]?(\\d{2})")
++                    val fullMatch = fullPattern.find(fileName!!)
++                    if (fullMatch != null) {
++                        val (y, mo, d, h, mi, s) = fullMatch.destructured
++                        val yr = y.toInt(); val mon = mo.toInt(); val day = d.toInt()
++                        if (yr in 1990..2100 && mon in 1..12 && day in 1..31) {
++                            contentDate = "$y-$mo-${d}T$h:$mi:${s}Z"
++                        }
++                    } else {
++                        val simplePattern = Regex("(\\d{4})[_-]?(\\d{2})[_-]?(\\d{2})")
++                        val simpleMatch = simplePattern.find(fileName!!)
++                        if (simpleMatch != null) {
++                            val (y, mo, d) = simpleMatch.destructured
++                            val yr = y.toInt(); val mon = mo.toInt(); val day = d.toInt()
++                            if (yr in 1990..2100 && mon in 1..12 && day in 1..31) {
++                                contentDate = "$y-$mo-${d}T12:00:00Z"
++                            }
++                        }
++                    }
++                } catch (e: Exception) {}
 +            }
  
              var mediaWidth: String? = null;
              var mediaHeight: String? = null;
-@@ -107,7 +164,8 @@ class ExpoShareIntentModule : Module() {
+@@ -90,7 +278,6 @@ class ExpoShareIntentModule : Module() {
+                 retriever.setDataSource(instance?.getAbsolutePath(uri))
+                 mediaWidth = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toInt().toString() ?: null
+                 mediaHeight = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toInt().toString() ?: null
+-                // Check orientation and flip size if required
+                 val metaRotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toInt() ?: 0;
+                 if (metaRotation == 90 || metaRotation == 270) {
+                     mediaWidth = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toInt().toString() ?: null
+@@ -107,7 +294,10 @@ class ExpoShareIntentModule : Module() {
                      "mimeType" to mimeType,
                      "width" to mediaWidth,
                      "height" to mediaHeight,
 -                    "duration" to mediaDuration
 +                    "duration" to mediaDuration,
-+                    "contentDate" to contentDate
++                    "contentDate" to contentDate,
++                    "gpsLat" to exifGpsLat,
++                    "gpsLon" to exifGpsLon
              )
          }
  
 diff --git a/node_modules/expo-share-intent/build/utils.js b/node_modules/expo-share-intent/build/utils.js
-index 3d343c6..952fe8e 100644
+index 3d343c6..5e4aeaa 100644
 --- a/node_modules/expo-share-intent/build/utils.js
 +++ b/node_modules/expo-share-intent/build/utils.js
-@@ -103,6 +103,7 @@ export const parseShareIntent = (value, options) => {
+@@ -103,6 +103,9 @@ export const parseShareIntent = (value, options) => {
                                  null,
                              mimeType: file.mimeType || null,
                              fileName: file.fileName || null,
 +                            contentDate: file.contentDate || null,
++                            gpsLat: file.gpsLat ? Number(file.gpsLat) : null,
++                            gpsLon: file.gpsLon ? Number(file.gpsLon) : null,
                              width: file.width ? Number(file.width) : null,
                              height: file.height ? Number(file.height) : null,
                              size: file.fileSize ? Number(file.fileSize) : null,

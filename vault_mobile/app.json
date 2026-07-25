@@ -26,12 +26,17 @@
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.WRITE_EXTERNAL_STORAGE"
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.ACCESS_MEDIA_LOCATION",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO"
       ]
     },
     "extra": {
       "eas": {
-        "projectId": "cb16824f-3f5e-4656-b8c9-42dd3a6ab373"
+        "projectId": "d485f06a-98ec-4a26-82fe-cad017907330"
       }
     },
     "plugins": [
@@ -39,10 +44,27 @@
         "expo-share-intent",
         {
           "iosShareExtensionTargetName": "VaultShareExtension",
-          "androidIntentFilters": ["image/*", "video/*", "*/*"],
-          "androidMultiIntentFilters": ["image/*", "video/*", "*/*"]
+          "androidIntentFilters": [
+            "image/*",
+            "video/*",
+            "*/*"
+          ],
+          "androidMultiIntentFilters": [
+            "image/*",
+            "video/*",
+            "*/*"
+          ]
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Permitir a Vault acceder a tus fotos.",
+          "savePhotosPermission": "Permitir a Vault guardar fotos.",
+          "isAccessMediaLocationEnabled": true
         }
       ]
-    ]
+    ],
+    "owner": "raspi3202"
   }
 }

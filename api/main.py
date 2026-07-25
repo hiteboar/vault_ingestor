@@ -3,6 +3,7 @@ import os
 import asyncio
 import hashlib
 import shutil
+import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -704,6 +705,8 @@ async def list_folders(x_device_token: str = Header(...)):
     for item in base_upload.iterdir():
         if item.is_dir():
             folder_name = item.name
+            if re.match(r'^\d{4}$', folder_name):
+                continue
             if role == "admin" or folder_name in allowed_folders or "*" in allowed_folders:
                 folders.append(folder_name)
                 
@@ -1307,6 +1310,7 @@ async def upload_file(
     file: UploadFile = File(...), 
     context: str = Form("root"),
     original_date: Optional[str] = Form(None),
+    filename: Optional[str] = Form(None),
     x_device_token: str = Header(...)
 ):
     """Securely uploads a file from the mobile app."""
@@ -1339,9 +1343,14 @@ async def upload_file(
             
         save_folder.mkdir(parents=True, exist_ok=True)
         
-        file_path = save_folder / file.filename
+        provided_name = filename or getattr(file, "filename", None)
+        safe_filename = Path(provided_name).name if provided_name else None
+        if not safe_filename:
+            safe_filename = f"upload_{int(time.time())}.bin"
+            
+        file_path = save_folder / safe_filename
         if file_path.exists():
-            file_path = save_folder / f"{int(time.time())}_{file.filename}"
+            file_path = save_folder / f"{int(time.time())}_{safe_filename}"
             
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)

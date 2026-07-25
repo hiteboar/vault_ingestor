@@ -14,8 +14,10 @@ import {
   Modal,
   Alert,
   PanResponder,
-  ScrollView
+  ScrollView,
+  Switch
 } from 'react-native';
+import { WebView } from 'react-native-webview';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Video, ResizeMode } from 'expo-av';
@@ -23,9 +25,19 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
+import * as MediaLibrary from 'expo-media-library';
 import * as api from './api';
 import { AppState } from 'react-native';
 import { useShareIntent } from 'expo-share-intent';
+import * as Notifications from 'expo-notifications';
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: false,
+    shouldSetBadge: false,
+  }),
+});
 
 const { width, height } = Dimensions.get('window');
 const COLUMN_COUNT = 3;
@@ -44,7 +56,8 @@ const formatBytes = (bytes, decimals = 2) => {
 export default function App() {
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState('gallery'); // 'gallery' or 'stats'
+  const [view, setView] = useState('gallery'); // 'gallery', 'stats', or 'map'
+  const [compressedMode, setCompressedMode] = useState(true);
   
   // Linking state
   const [url, setUrl] = useState('');
@@ -68,6 +81,18 @@ export default function App() {
   // Modals state
   const [uploadMenuVisible, setUploadMenuVisible] = useState(false);
   const [uploadState, setUploadState] = useState({ active: false, current: 0, total: 0, percent: 0 });
+  const [isCancellingUpload, setIsCancellingUpload] = useState(false);
+  const activeUploadCancelRef = React.useRef(null); // holds { cancel: fn } for current upload
+  
+  // Custom Gallery state
+  const [galleryVisible, setGalleryVisible] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedItems, setSelectedItems] = useState(new Set());
+  const [galleryAssets, setGalleryAssets] = useState([]);
+  const [selectedGalleryIds, setSelectedGalleryIds] = useState(new Set());
+  const [galleryHasNextPage, setGalleryHasNextPage] = useState(true);
+  const [galleryEndCursor, setGalleryEndCursor] = useState(null);
+  const [galleryLoading, setGalleryLoading] = useState(false);
   const [previewItem, setPreviewItem] = useState(null);
   const [previewSrc, setPreviewSrc] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -247,6 +272,74 @@ export default function App() {
     );
   };
 
+  const handleBulkDelete = async () => {
+    if (selectedItems.size === 0) return;
+    
+    Alert.alert(
+        'Eliminar Archivos',
+        `¿Seguro que deseas eliminar ${selectedItems.size} archivos permanentemente?`,
+        [
+            { text: 'Cancelar', style: 'cancel' },
+            { 
+                text: 'Eliminar', 
+                style: 'destructive',
+                onPress: async () => {
+                    try {
+                        setLoading(true);
+                        const ids = Array.from(selectedItems);
+                        for (let i = 0; i < ids.length; i++) {
+                            await api.deleteItem(ids[i]);
+                        }
+                        setSelectedItems(new Set());
+                        setSelectionMode(false);
+                        await loadData();
+                    } catch (e) {
+                        alert('Error al eliminar: ' + e.message);
+                    } finally {
+                        setLoading(false);
+                    }
+                }
+            }
+        ]
+    );
+  };
+
+  const handleBulkDownload = async () => {
+    if (selectedItems.size === 0) return;
+    const { status } = await MediaLibrary.requestPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permiso denegado', 'Se necesita acceso a tus fotos para poder descargar.');
+      return;
+    }
+
+    try {
+        setLoading(true);
+        const ids = Array.from(selectedItems);
+        let downloadedCount = 0;
+        for (let i = 0; i < ids.length; i++) {
+            const item = items.find(it => it.id === ids[i]);
+            if (item) {
+                const src = await api.getMediaUrl(item);
+                const ext = item.name.split('.').pop().toLowerCase();
+                const isMedia = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'mp4', 'mov', 'm4v', 'avi', 'mkv', 'webm'].includes(ext);
+                if (isMedia) {
+                    const fileUri = FileSystem.cacheDirectory + item.name;
+                    const downloadRes = await FileSystem.downloadAsync(src.uri, fileUri, { headers: src.headers });
+                    await MediaLibrary.saveToLibraryAsync(downloadRes.uri);
+                    downloadedCount++;
+                }
+            }
+        }
+        setSelectedItems(new Set());
+        setSelectionMode(false);
+        Alert.alert('Descarga Completa', `Se guardaron ${downloadedCount} archivos en tu galería.`);
+    } catch (e) {
+        alert('Error al descargar: ' + e.message);
+    } finally {
+        setLoading(false);
+    }
+  };
+
   const handleDeleteFolder = async () => {
       if (currentFolder === 'root') return;
       
@@ -311,9 +404,27 @@ export default function App() {
       setUploadMenuVisible(false);
       if (!assets || assets.length === 0) return;
 
+      const { status: existingStatus } = await Notifications.getPermissionsAsync();
+      let finalStatus = existingStatus;
+      if (existingStatus !== 'granted') {
+          const { status } = await Notifications.requestPermissionsAsync();
+          finalStatus = status;
+      }
+
       setUploadState({ active: true, current: 0, total: assets.length, percent: 0 });
+      setIsCancellingUpload(false);
       let successCount = 0;
       let anyFallback = false;
+      let cancelled = false;
+      const totalFiles = assets.length;
+      
+      if (finalStatus === 'granted') {
+          await Notifications.scheduleNotificationAsync({
+              identifier: "upload-queue",
+              content: { title: "Subiendo archivos...", body: `(0 / ${totalFiles}) - Vault Ingestor` },
+              trigger: null,
+          });
+      }
       
       for (let i = 0; i < assets.length; i++) {
           const asset = assets[i];
@@ -350,6 +461,9 @@ export default function App() {
 
           setUploadState(prev => ({ ...prev, current: i + 1, percent: 0 }));
           
+          // Check for cancellation before each file
+          if (cancelled) break;
+
           try {
               let originalDate = null;
               if (asset.exif && asset.exif.DateTimeOriginal) {
@@ -364,14 +478,32 @@ export default function App() {
                   
               const resp = await api.uploadFile(asset.uri, filename, mimeType, currentFolder, originalDate, (pct) => {
                   setUploadState(prev => ({ ...prev, percent: pct }));
-              });
+              }, (cancelFn) => { activeUploadCancelRef.current = cancelFn; });
+              activeUploadCancelRef.current = null;
               if (resp && resp.fallback_used) anyFallback = true;
               successCount++;
+              
+              if (finalStatus === 'granted' && (successCount % Math.max(1, Math.floor(totalFiles/10)) === 0 || successCount === totalFiles)) {
+                  await Notifications.scheduleNotificationAsync({
+                      identifier: "upload-queue",
+                      content: {
+                          title: successCount === totalFiles ? "¡Subida completada!" : "Subiendo archivos...",
+                          body: successCount === totalFiles ? `Se han subido ${successCount} archivos.` : `(${successCount} / ${totalFiles}) - Vault Ingestor`
+                      },
+                      trigger: null,
+                  });
+              }
           } catch(e) {
-              alert(`Error uploading ${filename}: ${e.message}`);
+              if (e.message && e.message.includes('cancel')) {
+                  cancelled = true;
+              } else {
+                  alert(`Error uploading ${filename}: ${e.message}`);
+              }
           }
       }
       
+      activeUploadCancelRef.current = null;
+      setIsCancellingUpload(false);
       setUploadState({ active: false, current: 0, total: 0, percent: 0 });
       loadData();
       if (successCount > 0 && successCount < assets.length) {
@@ -387,9 +519,25 @@ export default function App() {
       if (!shareFiles || shareFiles.length === 0) return;
       
       const assets = shareFiles;
+      const { status: existingStatus } = await Notifications.getPermissionsAsync();
+      let finalStatus = existingStatus;
+      if (existingStatus !== 'granted') {
+          const { status } = await Notifications.requestPermissionsAsync();
+          finalStatus = status;
+      }
+
       setShareUploadState({ active: true, current: 0, total: assets.length, percent: 0 });
       let successCount = 0;
       let anyFallback = false;
+      const totalFiles = assets.length;
+      
+      if (finalStatus === 'granted') {
+          await Notifications.scheduleNotificationAsync({
+              identifier: "upload-queue",
+              content: { title: "Subiendo compartidos...", body: `(0 / ${totalFiles}) - Vault Ingestor` },
+              trigger: null,
+          });
+      }
       
       for (let i = 0; i < assets.length; i++) {
           const asset = assets[i];
@@ -425,11 +573,11 @@ export default function App() {
           }
 
           setShareUploadState(prev => ({ ...prev, current: i + 1, percent: 0 }));
-          
+
           try {
               let originalDate = asset.customDate || null;
               
-              // ALWAYS upload the cached file (asset.path) to prevent permission/read errors with FormData
+              // Upload the cached file — binary content is identical to original, EXIF is preserved in the bytes
               const safePath = asset.path || '';
               const fileUriToUpload = safePath.startsWith('file://') ? safePath : `file://${safePath}`;
 
@@ -445,6 +593,17 @@ export default function App() {
               );
               if (resp && resp.fallback_used) anyFallback = true;
               successCount++;
+              
+              if (finalStatus === 'granted' && (successCount % Math.max(1, Math.floor(totalFiles/10)) === 0 || successCount === totalFiles)) {
+                  await Notifications.scheduleNotificationAsync({
+                      identifier: "upload-queue",
+                      content: {
+                          title: successCount === totalFiles ? "¡Subida completada!" : "Subiendo compartidos...",
+                          body: successCount === totalFiles ? `Se han subido ${successCount} archivos.` : `(${successCount} / ${totalFiles}) - Vault Ingestor`
+                      },
+                      trigger: null,
+                  });
+              }
           } catch(e) {
               alert(`Error uploading shared file ${filename}: ${e.message}`);
           }
@@ -477,16 +636,91 @@ export default function App() {
     }
   };
 
-  const handlePickMedia = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
-      allowsMultipleSelection: true,
-      quality: 1,
-      exif: true,
-    });
-    if (!result.canceled && result.assets && result.assets.length > 0) {
-      processUploads(result.assets);
+  const loadGallery = async (loadMore = false) => {
+    if (galleryLoading) return;
+    if (loadMore && !galleryHasNextPage) return;
+
+    setGalleryLoading(true);
+    try {
+      const options = {
+        mediaType: [MediaLibrary.MediaType.photo, MediaLibrary.MediaType.video],
+        first: 40,
+        sortBy: [MediaLibrary.SortBy.creationTime],
+      };
+      if (loadMore && galleryEndCursor) {
+        options.after = galleryEndCursor;
+      }
+      const result = await MediaLibrary.getAssetsAsync(options);
+      
+      setGalleryAssets(prev => loadMore ? [...prev, ...result.assets] : result.assets);
+      setGalleryHasNextPage(result.hasNextPage);
+      setGalleryEndCursor(result.endCursor);
+    } catch (e) {
+      console.log('Error loading gallery', e);
+      Alert.alert('Error', 'No se pudieron cargar las fotos.');
+    } finally {
+      setGalleryLoading(false);
     }
+  };
+
+  const handlePickMedia = async () => {
+    setUploadMenuVisible(false);
+    const { status } = await MediaLibrary.requestPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permiso denegado', 'Se necesita acceso a tus fotos para poder subirlas.');
+      return;
+    }
+    setGalleryAssets([]);
+    setSelectedGalleryIds(new Set());
+    setGalleryHasNextPage(true);
+    setGalleryEndCursor(null);
+    setGalleryVisible(true);
+    loadGallery(false);
+  };
+
+  const handleConfirmGallerySelection = async () => {
+    if (selectedGalleryIds.size === 0) {
+      setGalleryVisible(false);
+      return;
+    }
+    setGalleryVisible(false);
+    
+    // We need to fetch full info for each selected asset to get localUri/uri
+    const assetsToUpload = [];
+    for (const id of selectedGalleryIds) {
+      const asset = galleryAssets.find(a => a.id === id);
+      if (asset) {
+        try {
+          const assetInfo = await MediaLibrary.getAssetInfoAsync(asset);
+          assetsToUpload.push({
+            uri: assetInfo.localUri || assetInfo.uri,
+            mimeType: assetInfo.mediaType === 'video' ? 'video/mp4' : 'image/jpeg',
+            fileName: assetInfo.filename,
+            width: assetInfo.width,
+            height: assetInfo.height,
+            duration: assetInfo.duration
+          });
+        } catch (e) {
+          console.log('Error getting asset info', e);
+        }
+      }
+    }
+    
+    if (assetsToUpload.length > 0) {
+      processUploads(assetsToUpload);
+    }
+  };
+
+  const toggleGalleryAsset = (id) => {
+    setSelectedGalleryIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(id)) {
+        newSet.delete(id);
+      } else {
+        newSet.add(id);
+      }
+      return newSet;
+    });
   };
 
   const openPreview = async (item) => {
@@ -616,26 +850,66 @@ export default function App() {
               <View style={styles.rowItemsContainer}>
                   {row.items.map((item, index) => {
                       if (item.isFolder) {
+                          const folderItems = items.filter(i => i.context === item.name).sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || '')).slice(0, 4);
                           return (
                               <TouchableOpacity 
                                   key={item.id} 
-                                  style={[styles.folderCard, { width: rowItemWidth, height: rowItemWidth }]}
+                                  style={[styles.folderCard, { width: rowItemWidth, height: rowItemWidth, padding: 0, overflow: 'hidden' }]}
                                   onPress={() => setCurrentFolder(item.name)}
                               >
-                                  <MaterialCommunityIcons name="folder-multiple" size={32} color="#3b82f6" />
-                                  <Text style={styles.folderCardTitle} numberOfLines={1}>{item.name}</Text>
-                                  <Text style={styles.folderCardSub}>
-                                      {item.date_range?.newest ? item.date_range.newest.split('T')[0] : ''}
-                                  </Text>
+                                  {folderItems.length > 0 ? (
+                                      <View style={{ flex: 1, flexDirection: 'row', flexWrap: 'wrap' }}>
+                                          {[...Array(4)].map((_, i) => {
+                                              const fi = folderItems[i];
+                                              return (
+                                                  <View key={i} style={{ width: '50%', height: '50%', padding: 1, backgroundColor: '#1e293b' }}>
+                                                      {fi ? <Thumbnail item={fi} customWidth="100%" onPress={() => setCurrentFolder(item.name)} /> : null}
+                                                  </View>
+                                              );
+                                          })}
+                                      </View>
+                                  ) : (
+                                      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                                          <MaterialCommunityIcons name="folder-multiple" size={32} color="#3b82f6" />
+                                      </View>
+                                  )}
+                                  <View style={{ position: 'absolute', bottom: 0, width: '100%', backgroundColor: 'rgba(15, 23, 42, 0.8)', paddingVertical: 2, alignItems: 'center' }}>
+                                      <Text style={[styles.folderCardTitle, { marginTop: 0 }]} numberOfLines={1}>{item.name}</Text>
+                                      <Text style={styles.folderCardSub}>
+                                          {item.date_range?.newest ? item.date_range.newest.split('T')[0] : ''}
+                                      </Text>
+                                  </View>
                               </TouchableOpacity>
                           );
                       } else {
+                          const isSelected = selectedItems.has(item.id);
                           return (
                               <Thumbnail 
                                   key={item.id}
                                   item={item} 
-                                  onPress={() => openPreview(item)} 
+                                  onPress={() => {
+                                      if (selectionMode) {
+                                          const newSet = new Set(selectedItems);
+                                          if (newSet.has(item.id)) newSet.delete(item.id);
+                                          else newSet.add(item.id);
+                                          setSelectedItems(newSet);
+                                          if (newSet.size === 0) setSelectionMode(false);
+                                      } else {
+                                          openPreview(item);
+                                      }
+                                  }} 
+                                  onLongPress={() => {
+                                      if (!selectionMode) {
+                                          setSelectionMode(true);
+                                          const newSet = new Set();
+                                          newSet.add(item.id);
+                                          setSelectedItems(newSet);
+                                      }
+                                  }}
                                   customWidth={rowItemWidth}
+                                  showContextTag={!compressedMode && item.context !== 'root'}
+                                  selectionMode={selectionMode}
+                                  isSelected={isSelected}
                               />
                           );
                       }
@@ -648,7 +922,9 @@ export default function App() {
   const getProcessedItems = () => {
       let filtered = items.filter(i => {
           if (currentFolder === 'root') {
-              if (i.context !== 'root') return false;
+              if (compressedMode) {
+                  if (i.context !== 'root') return false;
+              }
               if (selectedYear !== 'All') {
                   if (!i.timestamp.startsWith(selectedYear)) return false;
               }
@@ -657,7 +933,7 @@ export default function App() {
           return i.context === currentFolder;
       });
 
-      if (currentFolder === 'root') {
+      if (currentFolder === 'root' && compressedMode) {
           Object.keys(foldersMeta).forEach(fName => {
               const meta = foldersMeta[fName];
               if (meta && meta.date_range && meta.date_range.newest) {
@@ -790,26 +1066,45 @@ export default function App() {
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" />       
       {/* Header */}
-      <View style={styles.header}>
-        <View style={{flexDirection: 'row', alignItems: 'center'}}>
-            {view === 'stats' && (
-                <TouchableOpacity onPress={() => setView('gallery')} style={{marginRight:15}}>
-                    <MaterialCommunityIcons name="arrow-left" size={28} color="#3b82f6" />
+      {selectionMode ? (
+        <View style={[styles.header, { backgroundColor: '#1e293b' }]}>
+            <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                <TouchableOpacity onPress={() => { setSelectionMode(false); setSelectedItems(new Set()); }} style={{marginRight:15}}>
+                    <MaterialCommunityIcons name="close" size={28} color="#94a3b8" />
                 </TouchableOpacity>
-            )}
-            <Text style={styles.headerTitle}>{view === 'stats' ? 'Control Panel' : 'Vault Ingestor'}</Text>
-        </View>
-        <View style={{flexDirection: 'row', alignItems:'center'}}>
-            <TouchableOpacity onPress={() => loadData(true)} disabled={loading} style={{marginRight: 20}}>
-                {loading ? <ActivityIndicator size="small" color="#3b82f6"/> : <MaterialCommunityIcons name="refresh" size={28} color="#3b82f6" />}
-            </TouchableOpacity>
-            {!previewItem && (
-                <TouchableOpacity onPress={() => setDrawerOpen(true)}>
-                    <MaterialCommunityIcons name="menu" size={32} color="#fff" />
+                <Text style={styles.headerTitle}>{selectedItems.size} seleccionados</Text>
+            </View>
+            <View style={{flexDirection: 'row', alignItems:'center'}}>
+                <TouchableOpacity onPress={handleBulkDownload} style={{marginRight: 20}}>
+                    <MaterialCommunityIcons name="download" size={28} color="#3b82f6" />
                 </TouchableOpacity>
-            )}
+                <TouchableOpacity onPress={handleBulkDelete}>
+                    <MaterialCommunityIcons name="trash-can-outline" size={28} color="#ef4444" />
+                </TouchableOpacity>
+            </View>
         </View>
-      </View>
+      ) : (
+        <View style={styles.header}>
+            <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                {view !== 'gallery' && (
+                    <TouchableOpacity onPress={() => setView('gallery')} style={{marginRight:15}}>
+                        <MaterialCommunityIcons name="arrow-left" size={28} color="#3b82f6" />
+                    </TouchableOpacity>
+                )}
+                <Text style={styles.headerTitle}>{view === 'stats' ? 'Control Panel' : view === 'map' ? 'Map Explorer' : 'Vault Ingestor'}</Text>
+            </View>
+            <View style={{flexDirection: 'row', alignItems:'center'}}>
+                <TouchableOpacity onPress={() => loadData(true)} disabled={loading} style={{marginRight: 20}}>
+                    {loading ? <ActivityIndicator size="small" color="#3b82f6"/> : <MaterialCommunityIcons name="refresh" size={28} color="#3b82f6" />}
+                </TouchableOpacity>
+                {!previewItem && (
+                    <TouchableOpacity onPress={() => setDrawerOpen(true)}>
+                        <MaterialCommunityIcons name="menu" size={32} color="#fff" />
+                    </TouchableOpacity>
+                )}
+            </View>
+        </View>
+      )}
 
       {/* Folder Selector & Management */}
       {view === 'gallery' && (
@@ -849,20 +1144,30 @@ export default function App() {
 
             {/* Timeline Filters (Year/Month) */}
             {currentFolder === 'root' && (
-                <View style={styles.filterBar}>
-                    <Text style={styles.filterLabel}>Filter:</Text>
-                    <FlatList 
-                        horizontal
-                        showsHorizontalScrollIndicator={false}
-                        data={['All', ...new Set(items.filter(i => i.context === 'root').map(i => (i.timestamp || '').split('-')[0]).filter(y => y))]}
-
-                        keyExtractor={y => y}
-                        renderItem={({item: y}) => (
-                           <TouchableOpacity onPress={() => setSelectedYear(y)} style={selectedYear === y ? styles.filterOptActive : styles.filterOpt}>
-                               <Text style={selectedYear === y ? styles.filterOptTextActive : styles.filterOptText}>{y}</Text>
-                           </TouchableOpacity>
-                        )}
-                    />
+                <View style={[styles.filterBar, { justifyContent: 'space-between' }]}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                        <Text style={styles.filterLabel}>Filter:</Text>
+                        <FlatList 
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            data={['All', ...new Set(items.filter(i => compressedMode ? i.context === 'root' : true).map(i => (i.timestamp || '').split('-')[0]).filter(y => y))]}
+                            keyExtractor={y => y}
+                            renderItem={({item: y}) => (
+                               <TouchableOpacity onPress={() => setSelectedYear(y)} style={selectedYear === y ? styles.filterOptActive : styles.filterOpt}>
+                                   <Text style={selectedYear === y ? styles.filterOptTextActive : styles.filterOptText}>{y}</Text>
+                               </TouchableOpacity>
+                            )}
+                        />
+                    </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 10 }}>
+                        <Text style={styles.filterLabel}>Comprimir</Text>
+                        <Switch
+                            trackColor={{ false: "#334155", true: "#3b82f6" }}
+                            thumbColor={"#f8fafc"}
+                            onValueChange={setCompressedMode}
+                            value={compressedMode}
+                        />
+                    </View>
                 </View>
             )}
 
@@ -924,14 +1229,36 @@ export default function App() {
             {/* Static bottom progress bar */}
             {uploadState.active && (
                 <View style={{ position: 'absolute', bottom: 85, left: 15, right: 15, backgroundColor: '#1e293b', padding: 15, borderRadius: 12, borderWidth: 1, borderColor: '#334155', elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84 }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-                        <Text style={{ color: '#fff', fontSize: 14, fontWeight: 'bold' }}>
-                            Uploading file {uploadState.current} of {uploadState.total}...
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                        <Text style={{ color: '#fff', fontSize: 14, fontWeight: 'bold', flex: 1 }}>
+                            {isCancellingUpload ? 'Cancelando...' : `Subiendo ${uploadState.current} de ${uploadState.total}...`}
                         </Text>
-                        <Text style={{ color: '#3b82f6', fontSize: 14, fontWeight: 'bold' }}>{uploadState.percent}%</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                            <Text style={{ color: '#3b82f6', fontSize: 14, fontWeight: 'bold' }}>{uploadState.percent}%</Text>
+                            <TouchableOpacity
+                                onPress={() => {
+                                    Alert.alert(
+                                        'Cancelar subida',
+                                        '¿Seguro que quieres cancelar la subida de archivos pendientes?',
+                                        [
+                                            { text: 'No', style: 'cancel' },
+                                            { text: 'Sí, cancelar', style: 'destructive', onPress: () => {
+                                                setIsCancellingUpload(true);
+                                                if (activeUploadCancelRef.current) {
+                                                    activeUploadCancelRef.current();
+                                                }
+                                            }}
+                                        ]
+                                    );
+                                }}
+                                style={{ backgroundColor: '#ef4444', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 4 }}
+                            >
+                                <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>✕ Cancelar</Text>
+                            </TouchableOpacity>
+                        </View>
                     </View>
                     <View style={{ height: 6, backgroundColor: '#334155', borderRadius: 3, overflow: 'hidden' }}>
-                        <View style={{ width: `${uploadState.percent}%`, height: '100%', backgroundColor: '#3b82f6' }} />
+                        <View style={{ width: `${uploadState.percent}%`, height: '100%', backgroundColor: isCancellingUpload ? '#ef4444' : '#3b82f6' }} />
                     </View>
                 </View>
             )}
@@ -962,6 +1289,23 @@ export default function App() {
                     </TouchableOpacity>
                 )}
             </View>
+        </View>
+      ) : view === 'map' ? (
+        <View style={{ flex: 1, backgroundColor: '#0f172a' }}>
+            <WebView
+                originWhitelist={['*']}
+                source={{ html: getMapHtml() }}
+                style={{ flex: 1, backgroundColor: 'transparent' }}
+                injectedJavaScript={`window.mapData = ${JSON.stringify(items.filter(i => i.gps))}; initMap();`}
+                javaScriptEnabled={true}
+                onMessage={(event) => {
+                    const data = JSON.parse(event.nativeEvent.data);
+                    if (data.action === 'openPreview' && data.id) {
+                        const itemToPreview = items.find(i => i.id === data.id);
+                        if (itemToPreview) openPreview(itemToPreview);
+                    }
+                }}
+            />
         </View>
       ) : (
         <View style={styles.statsContainer}>
@@ -1188,6 +1532,22 @@ export default function App() {
 
                        <TouchableOpacity 
                            style={styles.drawerItem} 
+                           onPress={() => { setView('gallery'); setDrawerOpen(false); }}
+                       >
+                           <MaterialCommunityIcons name="image-multiple" size={24} color="#3b82f6" style={styles.drawerItemIcon} />
+                           <Text style={styles.drawerItemText}>Gallery</Text>
+                       </TouchableOpacity>
+                       
+                       <TouchableOpacity 
+                           style={styles.drawerItem} 
+                           onPress={() => { setView('map'); setDrawerOpen(false); }}
+                       >
+                           <MaterialCommunityIcons name="map" size={24} color="#10b981" style={styles.drawerItemIcon} />
+                           <Text style={styles.drawerItemText}>Map Explorer</Text>
+                       </TouchableOpacity>
+
+                       <TouchableOpacity 
+                           style={styles.drawerItem} 
                            onPress={() => { setView('stats'); setDrawerOpen(false); }}
                        >
                            <MaterialCommunityIcons name="monitor-dashboard" size={24} color="#3b82f6" style={styles.drawerItemIcon} />
@@ -1350,9 +1710,21 @@ export default function App() {
                                                 ) : (
                                                     <MaterialCommunityIcons name="file-document" size={32} color="#94a3b8" style={{ marginRight: 10 }} />
                                                 )}
-                                                <Text style={{ color: '#fff', fontSize: 12, flex: 1 }} numberOfLines={1}>
-                                                    {file.fileName || (file.path ? file.path.split('/').pop() : `shared_${Date.now()}.bin`)}
-                                                </Text>
+                                                <View style={{ flex: 1 }}>
+                                                    <Text style={{ color: '#fff', fontSize: 12 }} numberOfLines={1}>
+                                                        {file.fileName || (file.path ? file.path.split('/').pop() : `shared_${Date.now()}.bin`)}
+                                                    </Text>
+                                                    {file.contentDate && (
+                                                        <Text style={{ color: '#10b981', fontSize: 10, marginTop: 2 }}>
+                                                            📅 {file.contentDate}
+                                                        </Text>
+                                                    )}
+                                                    {file.gpsLat != null && file.gpsLon != null && (
+                                                        <Text style={{ color: '#38bdf8', fontSize: 10, marginTop: 1 }}>
+                                                            📍 GPS: {file.gpsLat.toFixed(4)}, {file.gpsLon.toFixed(4)}
+                                                        </Text>
+                                                    )}
+                                                </View>
                                             </View>
                                             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                                                 <MaterialCommunityIcons name="calendar-edit" size={16} color="#64748b" style={{ marginRight: 5 }} />
@@ -1444,12 +1816,121 @@ export default function App() {
             </Modal>
        )}
 
+       {/* Custom Gallery Picker Modal */}
+       <Modal visible={galleryVisible} animationType="slide" onRequestClose={() => setGalleryVisible(false)}>
+         <SafeAreaView style={{ flex: 1, backgroundColor: '#0f172a' }}>
+           <View style={styles.galleryHeader}>
+             <TouchableOpacity onPress={() => setGalleryVisible(false)} style={{ padding: 10 }}>
+               <MaterialCommunityIcons name="close" size={24} color="#fff" />
+             </TouchableOpacity>
+             <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>Select Media</Text>
+             <TouchableOpacity 
+               onPress={handleConfirmGallerySelection} 
+               style={{ padding: 10, opacity: selectedGalleryIds.size > 0 ? 1 : 0.5 }}
+               disabled={selectedGalleryIds.size === 0}
+             >
+               <Text style={{ color: '#3b82f6', fontSize: 16, fontWeight: 'bold' }}>
+                 Add {selectedGalleryIds.size > 0 ? `(${selectedGalleryIds.size})` : ''}
+               </Text>
+             </TouchableOpacity>
+           </View>
+           <FlatList
+             data={galleryAssets}
+             keyExtractor={(item) => item.id}
+             numColumns={3}
+             renderItem={({ item }) => {
+               const isSelected = selectedGalleryIds.has(item.id);
+               return (
+                 <TouchableOpacity 
+                   style={{ width: Dimensions.get('window').width / 3, height: Dimensions.get('window').width / 3, padding: 1 }}
+                   onPress={() => toggleGalleryAsset(item.id)}
+                 >
+                   <Image source={{ uri: item.uri }} style={{ width: '100%', height: '100%', backgroundColor: '#1e293b' }} />
+                   {item.mediaType === 'video' && (
+                     <View style={{ position: 'absolute', bottom: 5, right: 5, backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 4, borderRadius: 4 }}>
+                       <Text style={{ color: '#fff', fontSize: 10 }}>{Math.round(item.duration)}s</Text>
+                     </View>
+                   )}
+                   {isSelected && (
+                     <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(59, 130, 246, 0.4)', borderWidth: 3, borderColor: '#3b82f6', justifyContent: 'center', alignItems: 'center' }}>
+                       <MaterialCommunityIcons name="check-circle" size={32} color="#fff" />
+                     </View>
+                   )}
+                 </TouchableOpacity>
+               );
+             }}
+             onEndReached={() => loadGallery(true)}
+             onEndReachedThreshold={0.5}
+             ListFooterComponent={galleryLoading ? <ActivityIndicator size="large" color="#3b82f6" style={{ margin: 20 }} /> : null}
+           />
+         </SafeAreaView>
+       </Modal>
+
     </SafeAreaView>
   );
 }
 
-// Componente helper para cargar thmbnails resolviendo sus Headers
-function Thumbnail({ item, onPress, customWidth }) {
+const getMapHtml = () => `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+    <style>
+        body { padding: 0; margin: 0; background-color: #0f172a; }
+        #map { height: 100vh; width: 100vw; }
+        .leaflet-container { background: #0f172a; }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+    <script>
+        var map;
+        var markers;
+        
+        function initMap() {
+            map = L.map('map').setView([0, 0], 2);
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; CARTO',
+                subdomains: 'abcd',
+                maxZoom: 20
+            }).addTo(map);
+            
+            markers = L.markerClusterGroup({
+                showCoverageOnHover: false,
+                maxClusterRadius: 50
+            });
+            
+            if (window.mapData && window.mapData.length > 0) {
+                var bounds = L.latLngBounds();
+                window.mapData.forEach(function(item) {
+                    if (item.gps && item.gps.lat != null && item.gps.lon != null) {
+                        var latlng = [item.gps.lat, item.gps.lon];
+                        bounds.extend(latlng);
+                        
+                        var marker = L.marker(latlng);
+                        marker.on('click', function() {
+                            window.ReactNativeWebView.postMessage(JSON.stringify({ action: 'openPreview', id: item.id }));
+                        });
+                        markers.addLayer(marker);
+                    }
+                });
+                map.addLayer(markers);
+                if (bounds.isValid()) {
+                    map.fitBounds(bounds, { padding: [20, 20], maxZoom: 15 });
+                }
+            }
+        }
+    </script>
+</body>
+</html>
+`;
+
+export function Thumbnail({ item, onPress, onLongPress, customWidth, showContextTag, selectionMode, isSelected }) {
     const [src, setSrc] = useState(null);
     const [failed, setFailed] = useState(false);
     
@@ -1476,17 +1957,22 @@ function Thumbnail({ item, onPress, customWidth }) {
 
     if (failed || !src) {
         return (
-            <TouchableOpacity style={[styles.imageContainer, customWidth && { width: customWidth, height: customWidth }]} onPress={onPress}>
+            <TouchableOpacity style={[styles.imageContainer, customWidth && { width: customWidth, height: customWidth }, selectionMode && !isSelected && { opacity: 0.5 }]} onPress={onPress} onLongPress={onLongPress}>
                 <View style={styles.filePlaceholder}>
                     <Text style={styles.fileIcon}>{isVideo ? '🎬' : '📄'}</Text>
                     <Text style={styles.fileNameText} numberOfLines={2}>{item.name}</Text>
                 </View>
+                {isSelected && (
+                    <View style={styles.selectedOverlay}>
+                        <MaterialCommunityIcons name="check-circle" size={24} color="#3b82f6" />
+                    </View>
+                )}
             </TouchableOpacity>
         );
     }
 
     return (
-        <TouchableOpacity style={[styles.imageContainer, customWidth && { width: customWidth, height: customWidth }]} onPress={onPress}>
+        <TouchableOpacity style={[styles.imageContainer, customWidth && { width: customWidth, height: customWidth }, selectionMode && !isSelected && { opacity: 0.5 }]} onPress={onPress} onLongPress={onLongPress}>
             <Image 
                 source={src} 
                 style={styles.thumbnail} 
@@ -1494,6 +1980,16 @@ function Thumbnail({ item, onPress, customWidth }) {
                 onError={() => setFailed(true)}
             />
             {renderOverlay()}
+            {showContextTag && (
+                <View style={styles.contextTag}>
+                    <Text style={styles.contextTagText} numberOfLines={1}>{item.context}</Text>
+                </View>
+            )}
+            {isSelected && (
+                <View style={styles.selectedOverlay}>
+                    <MaterialCommunityIcons name="check-circle" size={24} color="#3b82f6" />
+                </View>
+            )}
         </TouchableOpacity>
     );
 }
@@ -1548,6 +2044,7 @@ const styles = StyleSheet.create({
   fabContainer: { position: 'absolute', bottom: 30, right: 30, alignItems: 'center' },
   fab: { width: 60, height: 60, borderRadius: 30, backgroundColor: '#3b82f6', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: {width:0,height:4}, shadowOpacity:0.3, shadowRadius:4, elevation:5 },
   fabIcon: { fontSize: 28, color: '#fff' },
+  galleryHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 15, borderBottomWidth: 1, borderBottomColor: '#1e293b', backgroundColor: '#0f172a' },
   modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', alignItems: 'center' },
   modalClose: { position: 'absolute', top: 50, right: 20, zIndex: 10, padding: 10, backgroundColor: '#1e293b', borderRadius: 8 },
   modalCloseText: { color: '#fff', fontWeight: 'bold' },
@@ -1568,10 +2065,13 @@ const styles = StyleSheet.create({
   fileNameText: { color: '#94a3b8', fontSize: 10, textAlign: 'center', fontWeight: 'bold' },
   videoOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'center', alignItems: 'center' },
   videoIcon: { color: '#fff', fontSize: 24, opacity: 0.8 },
+  selectedOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(59, 130, 246, 0.3)', justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#3b82f6', borderRadius: 8 },
   unsupportedCard: { backgroundColor: '#1e293b', padding: 40, borderRadius: 20, alignItems: 'center', width: '80%' },
   unsupportedIcon: { fontSize: 64, marginBottom: 20 },
   unsupportedText: { color: '#fff', fontSize: 18, fontWeight: 'bold', textAlign: 'center' },
   unsupportedSub: { color: '#64748b', fontSize: 14, marginTop: 10, textAlign: 'center' },
+  contextTag: { position: 'absolute', top: 4, right: 4, backgroundColor: 'rgba(59, 130, 246, 0.9)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, maxWidth: '80%' },
+  contextTagText: { color: '#fff', fontSize: 8, fontWeight: 'bold' },
   // Drawer Styles
   drawerContainer: { flex: 1, flexDirection: 'row' },
   drawerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' },

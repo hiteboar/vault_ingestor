@@ -1,5 +1,7 @@
 import axios from 'axios';
 import * as SecureStore from 'expo-secure-store';
+import * as FileSystem from 'expo-file-system';
+import { startUpload, onProgress, onCompleted, onError, cancelUpload } from 'rn-background-upload';
 
 const TOKEN_KEY = 'vault_device_token';
 const URL_KEY = 'vault_server_url';
@@ -77,7 +79,6 @@ export const fetchItemInfo = async (itemId) => {
 export const getMediaUrl = async (item) => {
     const { url, token } = await getConnection();
     const encodedPath = item.web_path.split('/').map(segment => encodeURIComponent(segment)).join('/');
-    // We add the token as a query parameter because some mobile Image components ignore headers
     return { uri: `${url}/api/media/file/${encodedPath}?token=${token}`, headers: { 'X-Device-Token': token } };
 };
 
@@ -86,42 +87,88 @@ export const getThumbUrl = async (item) => {
     return { uri: `${url}/api/media/thumbnail/${item.id}?token=${token}`, headers: { 'X-Device-Token': token } };
 };
 
-export const uploadFile = async (uri, name, mimeType, folder, originalDate, onProgress) => {
+export const uploadFile = async (uri, name, mimeType, folder, originalDate, onProgressCallback, onCancelCallback) => {
     const { url, token } = await getConnection();
     if (!url) throw new Error('Not connected');
 
-    const formData = new FormData();
-    formData.append('file', {
-        uri,
-        name,
-        type: mimeType
-    });
-    formData.append('context', folder);
-    if (originalDate) {
-        formData.append('original_date', originalDate);
-    }
+    // rn-background-upload needs an absolute local path, not a file:// URI
+    const localPath = uri.startsWith('file://') ? uri.replace('file://', '') : uri;
 
-    try {
-        const resp = await axios.post(`${url}/api/upload`, formData, {
+    // Build query-string style parameters as form fields
+    const parameters = { context: folder, filename: name };
+    if (originalDate) parameters.original_date = originalDate;
+
+    return new Promise((resolve, reject) => {
+        let uploadId = null;
+        let progressSub = null;
+        let completeSub = null;
+        let errorSub = null;
+
+        const cleanup = () => {
+            try { progressSub && progressSub.remove(); } catch (_) {}
+            try { completeSub && completeSub.remove(); } catch (_) {}
+            try { errorSub && errorSub.remove(); } catch (_) {}
+        };
+
+        startUpload({
+            url: `${url}/api/upload`,
+            path: localPath,
+            method: 'POST',
+            type: 'multipart',
+            field: 'file',
             headers: {
                 'X-Device-Token': token,
-                'Content-Type': 'multipart/form-data',
             },
-            onUploadProgress: (progressEvent) => {
-                if (onProgress && progressEvent.total) {
-                    const percentCompleted = Math.min(100, Math.round((progressEvent.loaded * 100) / progressEvent.total));
-                    onProgress(percentCompleted);
-                }
+            parameters,
+            notification: { enabled: false }, // We use expo-notifications ourselves
+        }).then((id) => {
+            uploadId = id;
+
+            // Expose a cancel function to the caller
+            if (onCancelCallback) {
+                onCancelCallback(() => {
+                    cancelUpload(uploadId).catch(() => {});
+                });
             }
+
+            progressSub = onProgress((event) => {
+                if (event.id === uploadId && onProgressCallback) {
+                    onProgressCallback(event.progress);
+                }
+            });
+
+            completeSub = onCompleted((event) => {
+                if (event.id !== uploadId) return;
+                cleanup();
+                if (event.responseCode >= 200 && event.responseCode < 300) {
+                    try {
+                        resolve(JSON.parse(event.responseBody));
+                    } catch (_) {
+                        resolve({});
+                    }
+                } else {
+                    let errorMsg = 'Upload error';
+                    try {
+                        const body = JSON.parse(event.responseBody);
+                        errorMsg = body.detail || errorMsg;
+                    } catch (_) {}
+                    reject(new Error(`${errorMsg} (HTTP ${event.responseCode})`));
+                }
+            });
+
+            errorSub = onError((event) => {
+                if (event.id !== uploadId) return;
+                cleanup();
+                reject(new Error(event.error || 'Upload failed'));
+            });
+
+        }).catch((err) => {
+            cleanup();
+            reject(new Error(err.message || 'Could not start upload'));
         });
-        return resp.data;
-    } catch (error) {
-        if (error.response && error.response.data) {
-            throw new Error(error.response.data.detail || 'Upload error');
-        }
-        throw new Error(error.message || 'Upload error');
-    }
+    });
 };
+
 
 export const verifyPin = async (baseUrl, pin) => {
     const url = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;

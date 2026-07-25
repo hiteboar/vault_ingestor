@@ -213,6 +213,27 @@ class Api:
             os.startfile(path)
         return True
 
+    def create_folder(self, name):
+        """Creates a new empty folder on the active vault server (admin only)."""
+        try:
+            settings = load_client_settings()
+            url = f"{settings['url']}/api/folders"
+            headers = {
+                "x-device-token": settings["token"],
+                "Content-Type": "application/json"
+            }
+            res = requests.post(url, headers=headers, json={"name": name}, timeout=10)
+            if res.status_code in (200, 201):
+                return {"success": True}
+            else:
+                try:
+                    detail = res.json().get("detail", res.text[:300])
+                except Exception:
+                    detail = res.text[:300]
+                return {"success": False, "message": str(detail)}
+        except Exception as e:
+            return {"success": False, "message": str(e)}
+
     def get_client_connection(self):
         """Retrieves the active client configuration."""
         return load_client_settings()
@@ -913,9 +934,26 @@ HTML_CONTENT = """
                         Select
                     </button>
 
+                    <!-- New Folder Button -->
+                    <button id="btn-new-folder" onclick="promptCreateFolder()" class="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-900 border border-white/10 hover:border-blue-500/40 hover:text-blue-400 rounded-xl text-xs text-slate-300 transition-all">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>
+                        New Folder
+                    </button>
+
                     <select id="select-folder" onchange="onFolderChanged()" class="bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-blue-500">
-                        <option value="root">Timeline (All folders)</option>
+                        <option value="root">Timeline (All)</option>
                     </select>
+
+                    <!-- Grouped / Expanded Toggle — only visible in Timeline (All) -->
+                    <div id="toggle-group-container" class="flex items-center gap-2 px-3 py-2 bg-slate-900 border border-white/10 rounded-xl select-none">
+                        <svg class="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7a2 2 0 012-2h3.586a1 1 0 01.707.293L10.414 6.5A1 1 0 0011.121 7H19a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></svg>
+                        <span class="text-[10px] text-slate-400 font-semibold uppercase tracking-wide">Grouped</span>
+                        <label class="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="toggle-expand-all" onchange="onToggleChanged()" class="sr-only peer">
+                            <div class="w-8 h-4 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-blue-600"></div>
+                        </label>
+                        <span class="text-[10px] text-slate-400 font-semibold uppercase tracking-wide">All</span>
+                    </div>
 
                     <select id="select-sort" onchange="loadGalleryData()" class="bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-blue-500">
                         <option value="time-desc">Newest First</option>
@@ -928,6 +966,7 @@ HTML_CONTENT = """
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
                     </button>
                 </div>
+
             </header>
 
             <!-- Timeline Filter Bar -->
@@ -1515,6 +1554,7 @@ HTML_CONTENT = """
             if (selectModeActive) {
                 toggleSelectMode();
             }
+            updateToggleVisibility();
             loadGalleryData();
         }
 
@@ -1828,11 +1868,11 @@ HTML_CONTENT = """
                     const savedFVal = selector.value;
                     const savedUVal = uploaderSelector.value;
                     
-                    selector.innerHTML = '<option value="root">Timeline (All folders)</option>';
+                    selector.innerHTML = '<option value="root">Timeline (All)</option>';
                     uploaderSelector.innerHTML = '<option value="root">root (Timeline)</option>';
                     
                     fList.forEach(folder => {
-                        if (folder !== 'root') {
+                        if (folder !== 'root' && !/^\\d{4}$/.test(folder)) {
                             selector.innerHTML += `<option value="${folder}">${folder}</option>`;
                             uploaderSelector.innerHTML += `<option value="${folder}">${folder}</option>`;
                         }
@@ -1851,25 +1891,201 @@ HTML_CONTENT = """
             loadGalleryData();
         }
 
+        // ── Toggle visibility helper ────────────────────────────────────────
+        function updateToggleVisibility() {
+            const selectedFolder = document.getElementById('select-folder').value;
+            const toggleContainer = document.getElementById('toggle-group-container');
+            if (!toggleContainer) return;
+            toggleContainer.style.display = selectedFolder === 'root' ? 'flex' : 'none';
+        }
+
+        function onToggleChanged() {
+            renderFilteredGallery();
+        }
+
+        // ── New folder helper ───────────────────────────────────────────────
+        async function promptCreateFolder() {
+            const name = prompt('Nombre de la nueva carpeta:', '');
+            if (!name || !name.trim()) return;
+            const trimmed = name.trim();
+            if (trimmed.toLowerCase() === 'root') {
+                alert('"root" es un nombre reservado. Elige otro.');
+                return;
+            }
+            try {
+                const res = await window.pywebview.api.create_folder(trimmed);
+                if (res.success) {
+                    await loadGalleryData();
+                    // Select the newly created folder
+                    const sel = document.getElementById('select-folder');
+                    if (sel) {
+                        sel.value = trimmed;
+                        onFolderChanged();
+                    }
+                } else {
+                    alert('Error al crear la carpeta: ' + (res.message || 'Error desconocido'));
+                }
+            } catch (e) {
+                alert('Error al crear la carpeta: ' + e.message);
+            }
+        }
+
+        // ── Gallery render helpers ──────────────────────────────────────────
+        function buildItemCard(item, selectedFolder) {
+            const itemName = item.name || item.suggested_filename || (item.saved_path ? item.saved_path.split('/').pop().split(String.fromCharCode(92)).pop() : 'unnamed');
+            const lastDot = itemName.lastIndexOf('.');
+            const ext = lastDot !== -1 ? itemName.substring(lastDot).toLowerCase() : '';
+            const isImage = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.heic', '.heif'].includes(ext);
+            const isVideo = ['.mp4', '.mov', '.avi', '.mkv'].includes(ext);
+
+            let thumbSrc = "";
+            if (isImage || isVideo) {
+                thumbSrc = `${activeConnection.url}/api/media/thumbnail/${item.id}?token=${activeConnection.token}`;
+            }
+
+            const itemDiv = document.createElement('div');
+            itemDiv.id = `card-${item.id}`;
+
+            const isSelected = selectModeActive && selectedItemIds.has(item.id);
+            itemDiv.className = `glass rounded-2xl overflow-hidden card-hover border cursor-pointer relative group flex flex-col justify-between aspect-square transition-all duration-300 ${
+                isSelected ? 'border-blue-500 bg-blue-600/5' : 'border-white/5'
+            }`;
+
+            itemDiv.onclick = (e) => {
+                if (selectModeActive) {
+                    e.stopPropagation();
+                    toggleItemSelection(item.id);
+                } else {
+                    openLightbox(item);
+                }
+            };
+
+            let mediaBlock = "";
+            if (thumbSrc) {
+                mediaBlock = `<img src="${thumbSrc}" class="w-full h-full object-cover select-none group-hover:scale-105 transition-all duration-500" loading="lazy">`;
+            } else {
+                mediaBlock = `
+                <div class="w-full h-full bg-slate-900/50 flex flex-col items-center justify-center p-3 text-slate-500">
+                    <svg class="w-10 h-10 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                    <span class="text-[10px] uppercase font-bold text-slate-600 truncate max-w-full">${ext.replace('.', '')}</span>
+                </div>`;
+            }
+
+            let checkboxHtml = "";
+            if (selectModeActive) {
+                checkboxHtml = `
+                    <div class="absolute top-3 left-3 z-10" onclick="event.stopPropagation(); toggleItemSelection('${item.id}');">
+                        <input type="checkbox" id="chk-${item.id}" ${isSelected ? 'checked' : ''} class="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 bg-slate-900 border-white/10 pointer-events-none">
+                    </div>
+                `;
+            }
+
+            let contextBadgeHtml = "";
+            if (selectedFolder === 'root' && item.context && item.context !== 'root' && item.context !== 'default') {
+                contextBadgeHtml = `
+                    <div class="absolute top-3 right-3 z-10 px-2 py-0.5 bg-slate-950/80 backdrop-blur-md border border-white/10 rounded-full text-[9px] font-bold text-blue-400 tracking-wide uppercase select-none pointer-events-none shadow-md">
+                        ${item.context}
+                    </div>
+                `;
+            }
+
+            itemDiv.innerHTML = `
+                <div class="w-full flex-1 overflow-hidden relative bg-black/20">
+                    ${checkboxHtml}
+                    ${contextBadgeHtml}
+                    ${mediaBlock}
+                </div>
+                <div class="p-3 bg-slate-950/80 border-t border-white/5 flex flex-col">
+                    <span class="text-xs font-semibold truncate text-slate-200 block">${itemName}</span>
+                    <span class="text-[10px] text-slate-500 mt-0.5 block">${item.timestamp ? item.timestamp.substring(0, 10) : 'No Date'}</span>
+                </div>
+            `;
+
+            return itemDiv;
+        }
+
+        function renderFolderCard(folderName, items) {
+            const folderDiv = document.createElement('div');
+            folderDiv.className = `glass rounded-2xl overflow-hidden card-hover border border-white/5 hover:border-blue-500/40 cursor-pointer relative group flex flex-col aspect-square transition-all duration-300`;
+
+            folderDiv.onclick = () => {
+                const sel = document.getElementById('select-folder');
+                if (sel) {
+                    sel.value = folderName;
+                    onFolderChanged();
+                }
+            };
+
+            // Up to 4 thumbnails for the collage
+            const previewItems = items.slice(0, 4);
+            let thumbsHtml = '';
+            previewItems.forEach(item => {
+                const iName = item.name || item.suggested_filename || 'unnamed';
+                const ld = iName.lastIndexOf('.');
+                const ex = ld !== -1 ? iName.substring(ld).toLowerCase() : '';
+                const isImg = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.heic', '.heif'].includes(ex);
+                const isVid = ['.mp4', '.mov', '.avi', '.mkv'].includes(ex);
+                if (isImg || isVid) {
+                    const tSrc = `${activeConnection.url}/api/media/thumbnail/${item.id}?token=${activeConnection.token}`;
+                    thumbsHtml += `<div class="overflow-hidden bg-black/20 relative">
+                        <img src="${tSrc}" class="w-full h-full object-cover group-hover:scale-105 transition-all duration-500 select-none" loading="lazy">
+                        ${isVid ? '<div class="absolute inset-0 flex items-center justify-center bg-black/30"><svg class="w-5 h-5 text-white fill-current" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>' : ''}
+                    </div>`;
+                } else {
+                    thumbsHtml += `<div class="bg-slate-900/50 flex items-center justify-center">
+                        <svg class="w-6 h-6 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                    </div>`;
+                }
+            });
+            // Fill remaining slots
+            for (let i = previewItems.length; i < 4; i++) {
+                thumbsHtml += `<div class="bg-slate-900/20"></div>`;
+            }
+
+            folderDiv.innerHTML = `
+                <div class="flex-1 overflow-hidden relative">
+                    <div class="absolute top-2.5 left-2.5 z-10 p-1.5 bg-slate-950/80 backdrop-blur-md border border-white/10 rounded-lg shadow">
+                        <svg class="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7a2 2 0 012-2h3.586a1 1 0 01.707.293L10.414 6.5A1 1 0 0011.121 7H19a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></svg>
+                    </div>
+                    <div class="absolute top-2.5 right-2.5 z-10 px-2 py-0.5 bg-slate-950/80 backdrop-blur-md border border-white/10 rounded-full text-[9px] font-bold text-slate-300 tracking-wide select-none pointer-events-none">
+                        ${items.length} items
+                    </div>
+                    <div class="grid grid-cols-2 w-full h-full" style="grid-template-rows: 1fr 1fr;">
+                        ${thumbsHtml}
+                    </div>
+                </div>
+                <div class="p-3 bg-slate-950/80 border-t border-white/5 flex-shrink-0">
+                    <span class="text-xs font-semibold truncate text-slate-200 block">${folderName}</span>
+                    <span class="text-[10px] text-blue-400 mt-0.5 block font-medium">${items.length} elemento${items.length !== 1 ? 's' : ''}</span>
+                </div>
+            `;
+
+            return folderDiv;
+        }
+
         function renderFilteredGallery() {
             const grid = document.getElementById('gallery-grid');
             const empty = document.getElementById('gallery-empty');
             grid.innerHTML = "";
-            
+
             const selectedFolder = document.getElementById('select-folder').value;
             const sortMode = document.getElementById('select-sort').value;
-            
-            // Update folder actions button states
+            const expandToggle = document.getElementById('toggle-expand-all');
+            // Grouped mode: in root view and toggle is OFF (unchecked = grouped)
+            const isGrouped = selectedFolder === 'root' && expandToggle && !expandToggle.checked;
+
+            // Update UI controls
             updateFolderActionButtons();
-            
+            updateToggleVisibility();
+
             let filtered = [...activeGalleryItems];
-            
+
             // 1. Filter by Folder
             if (selectedFolder !== 'root') {
                 filtered = filtered.filter(item => item.context === selectedFolder);
             }
-            
-            // 2. Extract years and months for timeline
+
+            // 2. Extract years for timeline filters
             const yearsMap = new Set();
             filtered.forEach(item => {
                 if (item.timestamp) {
@@ -1877,111 +2093,111 @@ HTML_CONTENT = """
                     if (year && !isNaN(year)) yearsMap.add(year);
                 }
             });
-            
+
             // Render timeline buttons
             const timelineContainer = document.getElementById('timeline-filters-container');
-            timelineContainer.innerHTML = `<button onclick="filterTimeline('All')" class="px-3 py-1 rounded-lg text-xs font-medium ${activeTimelineFilter === 'All' ? 'bg-blue-600 text-white' : 'bg-slate-900 text-slate-400 hover:text-white'}">All</button>`;
-            
+            timelineContainer.innerHTML = `<button onclick="filterTimeline('All')" class="px-3 py-1.5 rounded-lg text-xs font-medium ${activeTimelineFilter === 'All' ? 'bg-blue-600 text-white' : 'bg-slate-900 text-slate-400 hover:text-white'}">All</button>`;
             Array.from(yearsMap).sort().reverse().forEach(year => {
-                timelineContainer.innerHTML += `<button onclick="filterTimeline('${year}')" class="px-3 py-1 rounded-lg text-xs font-medium ${activeTimelineFilter === year ? 'bg-blue-600 text-white' : 'bg-slate-900 text-slate-400 hover:text-white'}">${year}</button>`;
+                timelineContainer.innerHTML += `<button onclick="filterTimeline('${year}')" class="px-3 py-1.5 rounded-lg text-xs font-medium ${activeTimelineFilter === year ? 'bg-blue-600 text-white' : 'bg-slate-900 text-slate-400 hover:text-white'}">${year}</button>`;
             });
 
-            // 3. Filter by Timeline
+            // 3. Filter by Timeline year
             if (activeTimelineFilter !== 'All') {
                 filtered = filtered.filter(item => item.timestamp && item.timestamp.startsWith(activeTimelineFilter));
             }
 
+            if (filtered.length === 0) {
+                empty.style.display = "flex";
+                updateBatchActionBar();
+                return;
+            }
+            empty.style.display = "none";
+
+            // ── GROUPED MODE (root + toggle OFF) ───────────────────────────
+            if (isGrouped) {
+                // Separate items: those without a real folder vs those with one
+                const soloItems = filtered.filter(item =>
+                    !item.context || item.context === 'root' || item.context === 'default' || /^\\d{4}$/.test(item.context)
+                );
+                const folderItems = filtered.filter(item =>
+                    item.context && item.context !== 'root' && item.context !== 'default' && !/^\\d{4}$/.test(item.context)
+                );
+
+                // Group folder items by context name
+                const folderGroups = {};
+                folderItems.forEach(item => {
+                    if (!folderGroups[item.context]) folderGroups[item.context] = [];
+                    folderGroups[item.context].push(item);
+                });
+
+                // Sort helper
+                function sortArr(arr) {
+                    if (sortMode === 'time-desc') arr.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+                    else if (sortMode === 'time-asc') arr.sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
+                    else if (sortMode === 'name-asc') arr.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+                    else if (sortMode === 'size-desc') arr.sort((a, b) => (b.size || 0) - (a.size || 0));
+                    return arr;
+                }
+
+                sortArr(soloItems);
+
+                // Sort items within each folder group too
+                Object.values(folderGroups).forEach(arr => sortArr(arr));
+
+                // Build a unified render list mixing solo items and folder representatives
+                const renderList = [];
+
+                soloItems.forEach(item => {
+                    const sk = sortMode === 'name-asc' ? (item.name || '') :
+                               sortMode === 'size-desc' ? (item.size || 0) :
+                               (item.timestamp || '');
+                    renderList.push({ type: 'item', item, sortKey: sk });
+                });
+
+                Object.entries(folderGroups).forEach(([fName, fItems]) => {
+                    // Use the "best" representative value for sorting
+                    let sk;
+                    if (sortMode === 'time-desc') sk = fItems[0].timestamp || '';
+                    else if (sortMode === 'time-asc') sk = fItems[fItems.length - 1].timestamp || '';
+                    else if (sortMode === 'name-asc') sk = fName;
+                    else sk = fItems.reduce((acc, i) => acc + (i.size || 0), 0);
+                    renderList.push({ type: 'folder', folderName: fName, folderItems: fItems, sortKey: sk });
+                });
+
+                // Sort the unified list
+                if (sortMode === 'time-desc') renderList.sort((a, b) => String(b.sortKey).localeCompare(String(a.sortKey)));
+                else if (sortMode === 'time-asc') renderList.sort((a, b) => String(a.sortKey).localeCompare(String(b.sortKey)));
+                else if (sortMode === 'name-asc') renderList.sort((a, b) => String(a.sortKey).localeCompare(String(b.sortKey)));
+                else if (sortMode === 'size-desc') renderList.sort((a, b) => Number(b.sortKey) - Number(a.sortKey));
+
+                renderList.forEach(entry => {
+                    if (entry.type === 'item') {
+                        grid.appendChild(buildItemCard(entry.item, selectedFolder));
+                    } else {
+                        grid.appendChild(renderFolderCard(entry.folderName, entry.folderItems));
+                    }
+                });
+
+                updateBatchActionBar();
+                return;
+            }
+
+            // ── EXPANDED MODE (toggle ON or viewing a specific folder) ──────
             // 4. Sort
             if (sortMode === 'time-desc') {
-                filtered.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+                filtered.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
             } else if (sortMode === 'time-asc') {
-                filtered.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+                filtered.sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
             } else if (sortMode === 'name-asc') {
-                filtered.sort((a, b) => a.name.localeCompare(b.name));
+                filtered.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
             } else if (sortMode === 'size-desc') {
                 filtered.sort((a, b) => (b.size || 0) - (a.size || 0));
             }
-            
-            if (filtered.length === 0) {
-                empty.style.display = "flex";
-                return;
-            }
-            
-            empty.style.display = "none";
-            
+
             filtered.forEach(item => {
-                const itemName = item.name || item.suggested_filename || (item.saved_path ? item.saved_path.split('/').pop().split(String.fromCharCode(92)).pop() : 'unnamed');
-                const lastDot = itemName.lastIndexOf('.');
-                const ext = lastDot !== -1 ? itemName.substring(lastDot).toLowerCase() : '';
-                const isImage = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.heic', '.heif'].includes(ext);
-                const isVideo = ['.mp4', '.mov', '.avi', '.mkv'].includes(ext);
-                
-                let thumbSrc = "";
-                if (isImage || isVideo) {
-                    thumbSrc = `${activeConnection.url}/api/media/thumbnail/${item.id}?token=${activeConnection.token}`;
-                }
-
-                const itemDiv = document.createElement('div');
-                itemDiv.id = `card-${item.id}`;
-                
-                const isSelected = selectModeActive && selectedItemIds.has(item.id);
-                itemDiv.className = `glass rounded-2xl overflow-hidden card-hover border cursor-pointer relative group flex flex-col justify-between aspect-square transition-all duration-300 ${
-                    isSelected ? 'border-blue-500 bg-blue-600/5' : 'border-white/5'
-                }`;
-                
-                itemDiv.onclick = (e) => {
-                    if (selectModeActive) {
-                        e.stopPropagation();
-                        toggleItemSelection(item.id);
-                    } else {
-                        openLightbox(item);
-                    }
-                };
-
-                let mediaBlock = "";
-                if (thumbSrc) {
-                    mediaBlock = `<img src="${thumbSrc}" class="w-full h-full object-cover select-none group-hover:scale-105 transition-all duration-500" loading="lazy">`;
-                } else {
-                    // Document Icon Placeholder
-                    mediaBlock = `
-                    <div class="w-full h-full bg-slate-900/50 flex flex-col items-center justify-center p-3 text-slate-500">
-                        <svg class="w-10 h-10 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                        <span class="text-[10px] uppercase font-bold text-slate-600 truncate max-w-full">${ext.replace('.', '')}</span>
-                    </div>`;
-                }
-
-                let checkboxHtml = "";
-                if (selectModeActive) {
-                    checkboxHtml = `
-                        <div class="absolute top-3 left-3 z-10" onclick="event.stopPropagation(); toggleItemSelection('${item.id}');">
-                            <input type="checkbox" id="chk-${item.id}" ${isSelected ? 'checked' : ''} class="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 bg-slate-900 border-white/10 pointer-events-none">
-                        </div>
-                    `;
-                }
-
-                let contextBadgeHtml = "";
-                if (selectedFolder === 'root' && item.context && item.context !== 'root' && item.context !== 'default') {
-                    contextBadgeHtml = `
-                        <div class="absolute top-3 right-3 z-10 px-2 py-0.5 bg-slate-950/80 backdrop-blur-md border border-white/10 rounded-full text-[9px] font-bold text-blue-400 tracking-wide uppercase select-none pointer-events-none shadow-md">
-                            ${item.context}
-                        </div>
-                    `;
-                }
-
-                itemDiv.innerHTML = `
-                    <div class="w-full flex-1 overflow-hidden relative bg-black/20">
-                        ${checkboxHtml}
-                        ${contextBadgeHtml}
-                        ${mediaBlock}
-                    </div>
-                    <div class="p-3 bg-slate-950/80 border-t border-white/5 flex flex-col">
-                        <span class="text-xs font-semibold truncate text-slate-200 block">${itemName}</span>
-                        <span class="text-[10px] text-slate-500 mt-0.5 block">${item.timestamp ? item.timestamp.substring(0, 10) : 'No Date'}</span>
-                    </div>
-                `;
-                grid.appendChild(itemDiv);
+                grid.appendChild(buildItemCard(item, selectedFolder));
             });
-            
+
             updateBatchActionBar();
         }
 
@@ -1997,7 +2213,7 @@ HTML_CONTENT = """
             const mapDiv = document.getElementById('lightbox-minimap');
             if (!mapDiv) return;
             mapDiv.style.display = 'block';
-            
+
             setTimeout(() => {
                 try {
                     if (!lightboxMap) {
