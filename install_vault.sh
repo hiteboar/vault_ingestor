@@ -180,6 +180,7 @@ Wants=network-online.target
 [Service]
 User=$USER_NAME
 WorkingDirectory=$PROJECT_DIR
+ExecStartPre=$PYTHON_BIN $PROJECT_DIR/scripts/boot_updater.py
 ExecStart=$PYTHON_BIN $PROJECT_DIR/app.py --mode api
 Environment=VAULT_NO_AUTOINSTALL=true
 Restart=always

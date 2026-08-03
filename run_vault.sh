@@ -46,6 +46,13 @@ echo "[*] Managing vault services..."
 API_SERVICE="vault_api"
 BOT_SERVICE="vault_bot"
 
+echo "[*] Checking for updates and performing health checks..."
+if [ -f ".venv/bin/python" ]; then
+    sudo -u $USER .venv/bin/python scripts/boot_updater.py
+else
+    sudo -u $USER python3 scripts/boot_updater.py
+fi
+
 # Restart API
 if systemctl list-unit-files | grep -q "$API_SERVICE"; then
     echo "[*] Restarting API service..."

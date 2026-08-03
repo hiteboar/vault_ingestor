@@ -93,12 +93,13 @@ El backend actúa como el motor central headless del ecosistema. Ejecuta una API
 *   **Auto-reparación de Metadatos (Self-Healing)**: Durante el arranque, el servidor verifica que las rutas lógicas del archivo `metadata.jsonl` sigan existiendo en el disco físico. Si un archivo fue movido, busca su nueva ubicación bajo la carpeta de subidas y actualiza la base de datos automáticamente.
 *   **Túnel WAN Integrado**: Creación y reconexión automática de túneles Cloudflare para evitar abrir puertos en el enrutador.
 *   **Bot de Administración IA**: Servicio autónomo de Telegram que procesa imágenes sin comprimir (guardándolas e indexándolas) y ejecuta instrucciones del administrador en el sistema mediante el agente Gemini (`LLMAgent`).
-*   **Gestión de Arranque**: Configuración unificada mediante demonios `systemd` para asegurar tolerancia a fallos.
+*   **Gestión de Arranque y Actualizaciones Resilientes**: Configuración unificada mediante demonios `systemd` y un script de auto-actualización (`boot_updater.py`) que comprueba Releases en GitHub, genera copias de seguridad locales offline y realiza auto-rollback en caso de fallo durante la actualización.
 
 ### 📦 Requisitos y Herramientas Desarrolladas
 *   **Requisitos del sistema**: Linux (Raspberry Pi OS / Debian), Python 3.9+, Rust & Cargo (compilación de criptografía), FFmpeg (extracción de fotogramas), y el ejecutable oficial `cloudflared`.
-*   **`install_vault.sh`**: Script en Bash que detecta arquitectura, instala dependencias del sistema, genera el entorno virtual `.venv`, escribe la configuración básica en `.env` y registra/habilita los servicios `vault_api.service` y `vault_bot.service` bajo `systemd`.
-*   **`run_vault.sh`**: Wrapper en Bash para aplicar permisos del sistema (`chmod 775`), reiniciar los demonios, consultar la API y generar en la consola del servidor un código QR de emparejamiento en formato ASCII.
+*   **`install_vault.sh`**: Script en Bash que detecta arquitectura, instala dependencias, configura el entorno virtual `.venv`, crea `.env` y habilita `vault_api.service` y `vault_bot.service` bajo `systemd`, integrando la ejecución previa de `boot_updater.py`.
+*   **`run_vault.sh`**: Wrapper en Bash para aplicar permisos del sistema (`chmod 775`), ejecutar comprobaciones de salud/actualizaciones, reiniciar los demonios, consultar la API y generar en la consola del servidor un código QR de emparejamiento en formato ASCII.
+*   **`boot_updater.py`**: Script responsable del ciclo de actualización (descarga segura desde GitHub Releases, backup offline, verificación de sintaxis post-actualización y rollback automático).
 
 ### 🔍 Detalle Técnico (Clases, Métodos y Variables)
 
@@ -158,6 +159,8 @@ Maneja el polling y eventos del bot de Telegram.
     *   `_cmd_system_reboot(self, msg, is_admin: bool)`: Ejecuta el reinicio por hardware (`sudo reboot`).
     *   `_cmd_status(self, msg, chat_id, is_admin: bool)`: Envía un reporte del sistema: estado de servicios, RAM, CPU y espacio libre.
     *   `_cmd_get_access(self, msg, is_admin: bool)`: Reinicia la API en segundo plano y devuelve la nueva dirección WAN y PIN mediante imagen QR.
+    *   `_cmd_update_check(self, msg, is_admin: bool)`: Comprueba si existe una versión más reciente publicada en GitHub (Releases).
+    *   `_cmd_rollback(self, msg, is_admin: bool)`: Ejecuta una restauración offline desde la copia de seguridad local del sistema en caso de fallos.
     *   `_handle_message(self, update, context)`: Coordina la descarga en chunks (`requests.get`) de documentos, fotos y vídeos entrantes. Si el mensaje es texto simple, lo delega al Agente conversacional de IA.
 
 ---

@@ -94,6 +94,10 @@ class TelegramAdapter:
             return await self._cmd_status(msg, chat_id, is_admin)
         elif command == "/help":
             return await self._cmd_help(msg, is_admin)
+        elif command == "/update_check":
+            return await self._cmd_update_check(msg, is_admin)
+        elif command == "/rollback":
+            return await self._cmd_rollback(msg, is_admin)
         elif command == "/resetservice":
             # Alias for backward compatibility if user types it out of habit
             return await self._cmd_get_access(msg, is_admin)
@@ -165,11 +169,76 @@ class TelegramAdapter:
             "/system_reboot  → Reinicia la Raspberry Pi\n"
             "/get_access     → Reinicia la API y muestra QR de vinculación\n"
             "/status         → Ver métricas (CPU, RAM, Disco) y servicios\n"
+            "/update_check   → Comprobar estado de actualización en GitHub\n"
+            "/rollback       → Restaurar versión anterior desde copia de seguridad\n"
             "/help           → Muestra este menú\n\n"
             "💬 *Asistente IA*: Cualquier otro mensaje de texto será procesado "
             "automáticamente por el Agente de IA para administración y desarrollo."
         )
         await msg.reply_text(help_text, parse_mode="Markdown")
+        return True
+
+    async def _cmd_update_check(self, msg, is_admin: bool) -> bool:
+        if not is_admin:
+            await msg.reply_text("⛔ Solo administradores.")
+            return True
+
+        if not self.update_manager:
+            await msg.reply_text("⚠️ El gestor de actualizaciones no está configurado.")
+            return True
+
+        status_msg = await msg.reply_text("🔍 *Comprobando actualizaciones...*", parse_mode="Markdown")
+        try:
+            # We will implement real logic in update_manager later
+            # For now, we call a mock or check state
+            state = self.update_manager._get_state() if hasattr(self.update_manager, '_get_state') else {}
+            last_stable = state.get('last_stable', 'Ninguna')
+            
+            # This is a temporary placeholder output until Step 2 is done
+            msg_text = (
+                "📦 *Estado de Actualizaciones*\n\n"
+                f"▪️ Último backup estable: `{last_stable}`\n\n"
+                "_La comprobación de Releases en GitHub se activará en el Paso 2._"
+            )
+            await status_msg.edit_text(msg_text, parse_mode="Markdown")
+        except Exception as e:
+            await status_msg.edit_text(f"❌ *Error al comprobar actualizaciones:* {e}", parse_mode="Markdown")
+        return True
+
+    async def _cmd_rollback(self, msg, is_admin: bool) -> bool:
+        if not is_admin:
+            await msg.reply_text("⛔ Solo administradores.")
+            return True
+
+        if not self.update_manager:
+            await msg.reply_text("⚠️ El gestor de actualizaciones no está configurado.")
+            return True
+
+        status_msg = await msg.reply_text("🔄 *Iniciando proceso de Rollback offline...*", parse_mode="Markdown")
+        try:
+            # Call rollback on update manager
+            if hasattr(self.update_manager, 'rollback_to_last_stable'):
+                success, reason = self.update_manager.rollback_to_last_stable("Solicitado vía Telegram")
+            else:
+                # Fallback to current rollback method if new one is not ready yet
+                success, reason = self.update_manager.rollback()
+
+            if success:
+                await status_msg.edit_text(
+                    "✅ *Sistema restaurado con éxito a la copia de seguridad local (sin conexión a GitHub).*\n\n"
+                    "Reiniciando servicios...",
+                    parse_mode="Markdown"
+                )
+                # Restart services after a short delay
+                async def restart_services():
+                    await asyncio.sleep(2)
+                    subprocess.run(["sudo", "systemctl", "restart", "vault_api", "vault_bot"], check=False)
+                asyncio.create_task(restart_services())
+            else:
+                await status_msg.edit_text(f"❌ *Error en Rollback:* {reason}", parse_mode="Markdown")
+
+        except Exception as e:
+            await status_msg.edit_text(f"❌ *Error crítico al ejecutar rollback:* {e}", parse_mode="Markdown")
         return True
 
     async def _cmd_get_access(self, msg, is_admin: bool) -> bool:
