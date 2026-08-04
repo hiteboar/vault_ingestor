@@ -79,25 +79,38 @@ class UpdateManager:
         logger.info(f"[Updater] Backup creado correctamente en {self.backups_dir}")
         return str(self.backups_dir)
 
-    def check_git_updates(self) -> tuple[bool, str]:
-        """Comprueba si hay una nueva 'Release' (Tag) publicada en GitHub."""
-        logger.info("[Updater] Comprobando Releases en GitHub...")
-        api_url = "https://api.github.com/repos/hiteboar/vault_ingestor/releases/latest"
+    def check_git_updates(self, target_tag: str = None) -> tuple[bool, str]:
+        """Comprueba si hay una nueva 'Release' (Tag) publicada en GitHub.
+        Si se especifica target_tag, comprueba la existencia de ese tag específico.
+        """
+        if target_tag:
+            logger.info(f"[Updater] Comprobando existencia de la Release: {target_tag}...")
+            api_url = f"https://api.github.com/repos/hiteboar/vault_ingestor/releases/tags/{target_tag}"
+        else:
+            logger.info("[Updater] Comprobando última Release en GitHub...")
+            api_url = "https://api.github.com/repos/hiteboar/vault_ingestor/releases/latest"
+            
         try:
             response = requests.get(api_url, timeout=10)
             if response.status_code == 200:
-                latest_release = response.json()
-                remote_tag = latest_release.get("tag_name")
+                release_data = response.json()
+                remote_tag = release_data.get("tag_name")
                 
                 state = self._get_state()
                 local_tag = state.get("current_version", "unknown")
                 
-                if remote_tag and remote_tag != local_tag:
+                if target_tag:
+                    logger.info(f"[Updater] Tag '{remote_tag}' encontrado con éxito.")
+                    return True, remote_tag
+                elif remote_tag and remote_tag != local_tag:
                     logger.info(f"[Updater] Nueva versión detectada: {remote_tag} (Actual: {local_tag})")
                     return True, remote_tag
                 else:
                     logger.info("[Updater] El sistema ya está en la última versión.")
                     return False, local_tag
+            elif response.status_code == 404 and target_tag:
+                logger.warning(f"[Updater] El tag {target_tag} no existe como Release en GitHub.")
+                return False, "not_found"
             else:
                 logger.warning(f"[Updater] GitHub API devolvió status {response.status_code}")
         except Exception as e:

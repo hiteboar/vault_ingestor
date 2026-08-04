@@ -95,7 +95,7 @@ class TelegramAdapter:
         elif command == "/help":
             return await self._cmd_help(msg, is_admin)
         elif command == "/update_check":
-            return await self._cmd_update_check(msg, is_admin)
+            return await self._cmd_update_check(msg, is_admin, args)
         elif command == "/rollback":
             return await self._cmd_rollback(msg, is_admin)
         elif command == "/resetservice":
@@ -178,7 +178,7 @@ class TelegramAdapter:
         await msg.reply_text(help_text, parse_mode="Markdown")
         return True
 
-    async def _cmd_update_check(self, msg, is_admin: bool) -> bool:
+    async def _cmd_update_check(self, msg, is_admin: bool, target_tag: str = "") -> bool:
         if not is_admin:
             await msg.reply_text("⛔ Solo administradores.")
             return True
@@ -187,19 +187,28 @@ class TelegramAdapter:
             await msg.reply_text("⚠️ El gestor de actualizaciones no está configurado.")
             return True
 
-        status_msg = await msg.reply_text("🔍 *Comprobando actualizaciones...*", parse_mode="Markdown")
+        target_tag = target_tag.strip()
+        search_msg = f"🔍 *Comprobando Release `{target_tag}` en GitHub...*" if target_tag else "🔍 *Comprobando última Release en GitHub...*"
+        status_msg = await msg.reply_text(search_msg, parse_mode="Markdown")
         try:
-            # We will implement real logic in update_manager later
-            # For now, we call a mock or check state
+            has_updates, remote_tag = self.update_manager.check_git_updates(target_tag=target_tag if target_tag else None)
+            
             state = self.update_manager._get_state() if hasattr(self.update_manager, '_get_state') else {}
+            local_tag = state.get("current_version", "unknown")
             last_stable = state.get('last_stable', 'Ninguna')
             
-            # This is a temporary placeholder output until Step 2 is done
-            msg_text = (
-                "📦 *Estado de Actualizaciones*\n\n"
-                f"▪️ Último backup estable: `{last_stable}`\n\n"
-                "_La comprobación de Releases en GitHub se activará en el Paso 2._"
-            )
+            msg_text = "📦 *Estado de Actualizaciones*\n\n"
+            msg_text += f"▪️ Versión instalada: `{local_tag}`\n"
+            msg_text += f"▪️ Último backup estable: `{last_stable}`\n\n"
+            
+            if has_updates:
+                msg_text += f"🚀 *¡Nueva Release disponible!*\nTag: `{remote_tag}`\n"
+                msg_text += "_La actualización se aplicará automáticamente en el próximo reinicio._"
+            elif target_tag and remote_tag == "not_found":
+                msg_text += f"❌ *El tag `{target_tag}` no existe* o no está publicado como Release."
+            else:
+                msg_text += "✅ *El sistema está en la última versión.*"
+                
             await status_msg.edit_text(msg_text, parse_mode="Markdown")
         except Exception as e:
             await status_msg.edit_text(f"❌ *Error al comprobar actualizaciones:* {e}", parse_mode="Markdown")
