@@ -122,12 +122,8 @@ class UpdateManager:
             
         return False, "unknown"
 
-    def perform_boot_update(self):
-        """Ejecuta el flujo de actualización al inicio del sistema."""
-        has_updates, new_tag = self.check_git_updates()
-        if not has_updates:
-            return
-
+    def apply_update(self, new_tag: str):
+        """Aplica la descarga de un tag específico y prepara el reinicio del sistema."""
         logger.info(f"[Updater] Iniciando actualización a la versión {new_tag}...")
         print(f"[*] Descargando nueva versión: {new_tag}")
         
