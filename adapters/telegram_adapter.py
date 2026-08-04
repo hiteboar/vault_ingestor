@@ -166,12 +166,12 @@ class TelegramAdapter:
 
         help_text = (
             "🤖 *Vault OS Agent - Comandos Administrativos*\n\n"
-            "/system_reboot  → Reinicia la Raspberry Pi\n"
-            "/get_access     → Reinicia la API y muestra QR de vinculación\n"
-            "/status         → Ver métricas (CPU, RAM, Disco) y servicios\n"
-            "/update_check   → Comprobar estado de actualización en GitHub\n"
-            "/rollback       → Restaurar versión anterior desde copia de seguridad\n"
-            "/help           → Muestra este menú\n\n"
+            "\\/system\\_reboot  → Reinicia la Raspberry Pi\n"
+            "\\/get\\_access     → Reinicia la API y muestra QR de vinculación\n"
+            "\\/status         → Ver métricas (CPU, RAM, Disco) y servicios\n"
+            "\\/update\\_check   → Comprobar estado de actualización en GitHub\n"
+            "\\/rollback       → Restaurar versión anterior desde copia de seguridad\n"
+            "\\/help           → Muestra este menú\n\n"
             "💬 *Asistente IA*: Cualquier otro mensaje de texto será procesado "
             "automáticamente por el Agente de IA para administración y desarrollo."
         )
