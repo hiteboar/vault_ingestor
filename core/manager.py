@@ -80,53 +80,41 @@ class UpdateManager:
         return str(self.backups_dir)
 
     def check_git_updates(self, target_tag: str = None) -> tuple[bool, str]:
-        """Comprueba si hay una nueva versión en GitHub.
-        Si se especifica target_tag, comprueba la existencia de ese tag o commit.
-        """
+        """Comprueba si hay una nueva versión en GitHub usando git fetch local."""
+        
+        # Siempre hacemos un fetch primero
+        subprocess.run(["git", "fetch", "--all", "--tags"], cwd=str(self.base_dir), check=False, capture_output=True)
+        
         if target_tag:
             logger.info(f"[Updater] Comprobando existencia del Tag o Commit: {target_tag}...")
-            api_url = f"https://api.github.com/repos/hiteboar/vault_ingestor/git/refs/tags/{target_tag}"
-            commit_url = f"https://api.github.com/repos/hiteboar/vault_ingestor/commits/{target_tag}"
-        else:
-            logger.info("[Updater] Comprobando última Release en GitHub...")
-            api_url = "https://api.github.com/repos/hiteboar/vault_ingestor/releases/latest"
-            commit_url = None
+            # Comprobar si target_tag existe localmente como commit
+            res = subprocess.run(["git", "cat-file", "-t", target_tag], cwd=str(self.base_dir), capture_output=True, text=True)
+            if res.returncode == 0 and res.stdout.strip() == "commit":
+                logger.info(f"[Updater] Commit o Tag '{target_tag}' verificado con éxito.")
+                return True, target_tag
             
-        try:
-            response = requests.get(api_url, timeout=10)
-            if response.status_code == 404 and commit_url:
-                # Si no es un tag, probamos a ver si es un commit hash
-                response = requests.get(commit_url, timeout=10)
-
-            if response.status_code == 200:
-                release_data = response.json()
-                
-                if target_tag:
-                    remote_tag = target_tag
-                else:
-                    remote_tag = release_data.get("tag_name")
-                
+            logger.warning(f"[Updater] El tag/commit {target_tag} no existe o no es un commit válido.")
+            return False, "not_found"
+        else:
+            logger.info("[Updater] Buscando el último tag publicado...")
+            res = subprocess.run(
+                ["git", "tag", "--sort=-v:refname"],
+                cwd=str(self.base_dir), capture_output=True, text=True
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                remote_tag = res.stdout.splitlines()[0].strip()
                 state = self._get_state()
                 local_tag = state.get("current_version", "unknown")
                 
-                if target_tag:
-                    logger.info(f"[Updater] Tag '{remote_tag}' encontrado con éxito.")
-                    return True, remote_tag
-                elif remote_tag and remote_tag != local_tag:
+                if remote_tag != local_tag:
                     logger.info(f"[Updater] Nueva versión detectada: {remote_tag} (Actual: {local_tag})")
                     return True, remote_tag
                 else:
                     logger.info("[Updater] El sistema ya está en la última versión.")
                     return False, local_tag
-            elif response.status_code == 404 and target_tag:
-                logger.warning(f"[Updater] El tag {target_tag} no existe en el repositorio remoto.")
-                return False, "not_found"
-            else:
-                logger.warning(f"[Updater] GitHub API devolvió status {response.status_code}")
-        except Exception as e:
-            logger.error(f"[Updater] Error comprobando actualizaciones en GitHub: {e}")
-            
-        return False, "unknown"
+                        
+            logger.warning("[Updater] No se encontraron tags locales.")
+            return False, "unknown"
 
     def apply_update(self, new_tag: str):
         """Aplica la descarga de un tag específico y prepara el reinicio del sistema."""
