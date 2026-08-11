@@ -81,17 +81,23 @@ class UpdateManager:
 
     def check_git_updates(self, target_tag: str = None) -> tuple[bool, str]:
         """Comprueba si hay una nueva versión en GitHub.
-        Si se especifica target_tag, comprueba la existencia de ese tag (sea o no Release).
+        Si se especifica target_tag, comprueba la existencia de ese tag o commit.
         """
         if target_tag:
-            logger.info(f"[Updater] Comprobando existencia del Git Tag: {target_tag}...")
+            logger.info(f"[Updater] Comprobando existencia del Tag o Commit: {target_tag}...")
             api_url = f"https://api.github.com/repos/hiteboar/vault_ingestor/git/refs/tags/{target_tag}"
+            commit_url = f"https://api.github.com/repos/hiteboar/vault_ingestor/commits/{target_tag}"
         else:
             logger.info("[Updater] Comprobando última Release en GitHub...")
             api_url = "https://api.github.com/repos/hiteboar/vault_ingestor/releases/latest"
+            commit_url = None
             
         try:
             response = requests.get(api_url, timeout=10)
+            if response.status_code == 404 and commit_url:
+                # Si no es un tag, probamos a ver si es un commit hash
+                response = requests.get(commit_url, timeout=10)
+
             if response.status_code == 200:
                 release_data = response.json()
                 
@@ -130,11 +136,11 @@ class UpdateManager:
         # 1. Backup local
         self.create_local_backup()
         
-        # 2. Actualizar vía git fetch --tags y checkout
+        # 2. Actualizar vía git fetch y checkout
         try:
-            # Traer tags
-            subprocess.run(["git", "fetch", "--tags"], cwd=str(self.base_dir), check=True, capture_output=True)
-            # Mover a la etiqueta específica (detached HEAD)
+            # Traer tags y commits de todas las ramas
+            subprocess.run(["git", "fetch", "--all", "--tags"], cwd=str(self.base_dir), check=True, capture_output=True)
+            # Mover a la etiqueta o commit específico (detached HEAD)
             subprocess.run(["git", "checkout", new_tag], cwd=str(self.base_dir), check=True, capture_output=True)
             
             # 3. Marcar estado para chequeo de salud
