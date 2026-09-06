@@ -8,7 +8,6 @@ import {
   FlatList, 
   Image, 
   ActivityIndicator,
-  SafeAreaView,
   StatusBar,
   Dimensions,
   Modal,
@@ -17,6 +16,7 @@ import {
   ScrollView,
   Switch
 } from 'react-native';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -27,9 +27,12 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
 import * as api from './api';
+import * as updater from './updater';
 import { AppState } from 'react-native';
 import { useShareIntent } from 'expo-share-intent';
 import * as Notifications from 'expo-notifications';
+
+const APP_VERSION = '1.0.0';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -53,7 +56,8 @@ const formatBytes = (bytes, decimals = 2) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 };
 
-export default function App() {
+function MainApp() {
+  const insets = useSafeAreaInsets();
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('gallery'); // 'gallery', 'stats', or 'map'
@@ -122,8 +126,113 @@ export default function App() {
   const [selectedInviteFolders, setSelectedInviteFolders] = useState(['root']);
   const [lastUpdated, setLastUpdated] = useState(new Date());
 
+  // App Update state
+  const [updateInfo, setUpdateInfo] = useState(null);
+  const [updateModalVisible, setUpdateModalVisible] = useState(false);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [updateDownloadState, setUpdateDownloadState] = useState({
+    downloading: false,
+    percent: 0,
+    downloadedBytes: 0,
+    totalBytes: 0,
+    error: null,
+    downloadedUri: null,
+  });
+
+  const handleCheckUpdate = async (manual = false) => {
+    if (isCheckingUpdate) return;
+    setIsCheckingUpdate(true);
+    try {
+      const result = await updater.checkForUpdate(APP_VERSION);
+      if (result.hasUpdate) {
+        setUpdateInfo(result);
+        setUpdateModalVisible(true);
+      } else if (manual) {
+        if (result.error) {
+          Alert.alert('Actualizaciones', result.error);
+        } else if (result.hasNewerVersion && !result.hasApkAsset) {
+          Alert.alert(
+            'Nueva versión detectada',
+            `Se ha publicado la versión ${result.latestVersion}, pero aún no tiene el archivo APK adjunto en GitHub Releases.`
+          );
+        } else {
+          Alert.alert(
+            'Actualizaciones',
+            `¡Estás al día! Vault Mobile v${APP_VERSION} es la versión más reciente.`
+          );
+        }
+      }
+    } catch (e) {
+      if (manual) Alert.alert('Error', 'No se pudo comprobar la actualización: ' + e.message);
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  };
+
+  const handleStartDownloadUpdate = async () => {
+    if (!updateInfo || !updateInfo.apkUrl) {
+      Alert.alert('Error', 'No hay enlace de descarga disponible para el APK.');
+      return;
+    }
+
+    setUpdateDownloadState({
+      downloading: true,
+      percent: 0,
+      downloadedBytes: 0,
+      totalBytes: updateInfo.apkSize || 0,
+      error: null,
+      downloadedUri: null,
+    });
+
+    try {
+      const localUri = await updater.downloadApk(updateInfo.apkUrl, (progress) => {
+        setUpdateDownloadState(prev => ({
+          ...prev,
+          percent: progress.percent,
+          downloadedBytes: progress.downloadedBytes,
+          totalBytes: progress.totalBytes || prev.totalBytes,
+        }));
+      });
+
+      setUpdateDownloadState(prev => ({
+        ...prev,
+        downloading: false,
+        downloadedUri: localUri,
+      }));
+
+      // Trigger installer automatically
+      await updater.installApk(localUri);
+    } catch (err) {
+      console.error('Error downloading/installing update:', err);
+      setUpdateDownloadState(prev => ({
+        ...prev,
+        downloading: false,
+        error: err.message,
+      }));
+      Alert.alert('Fallo en la actualización', 'No se pudo completar la instalación: ' + err.message);
+    }
+  };
+
+  const handleCancelUpdateDownload = async () => {
+    await updater.cancelDownload();
+    setUpdateDownloadState({
+      downloading: false,
+      percent: 0,
+      downloadedBytes: 0,
+      totalBytes: 0,
+      error: null,
+      downloadedUri: null,
+    });
+    setUpdateModalVisible(false);
+  };
+
   useEffect(() => {
     checkConnection();
+    // Silent update check in background 3s after startup
+    const updateTimer = setTimeout(() => {
+      handleCheckUpdate(false);
+    }, 3000);
+    return () => clearTimeout(updateTimer);
   }, []);
 
   useEffect(() => {
@@ -1009,7 +1118,8 @@ export default function App() {
 
   if (loading && !connected) {
     return (
-      <View style={styles.container}>
+      <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom, justifyContent: 'center', alignItems: 'center' }]}>
+        <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
         <ActivityIndicator size="large" color="#3b82f6" />
       </View>
     );
@@ -1019,7 +1129,8 @@ export default function App() {
       // (Scan & Login UI... omitted largely unchanged but simplified for space)
       if (showScanner) {
         return (
-          <SafeAreaView style={styles.container}>
+          <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+            <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
             <CameraView 
               style={StyleSheet.absoluteFillObject}
               facing="back"
@@ -1028,17 +1139,17 @@ export default function App() {
             />
             <View style={styles.scannerOverlay}>
                <View style={styles.scannerBox} />
-               <TouchableOpacity style={styles.buttonCancelScanner} onPress={() => setShowScanner(false)}>
+               <TouchableOpacity style={[styles.buttonCancelScanner, { bottom: Math.max(insets.bottom, 20) + 20 }]} onPress={() => setShowScanner(false)}>
                  <Text style={styles.buttonText}>Cancel Scan</Text>
                </TouchableOpacity>
             </View>
-          </SafeAreaView>
+          </View>
         );
       }
   
       return (
-        <SafeAreaView style={styles.container}>
-          <StatusBar barStyle="light-content" />
+        <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+          <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
           <View style={styles.content}>
             <Text style={styles.title}>Link Vault</Text>
             <Text style={styles.subtitle}>Scan a QR to enter.</Text>
@@ -1058,16 +1169,16 @@ export default function App() {
               <Text style={styles.buttonText}>Link</Text>
             </TouchableOpacity>
           </View>
-        </SafeAreaView>
+        </View>
       );
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" />       
+    <View style={[styles.container, { paddingBottom: insets.bottom }]}>
+      <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />       
       {/* Header */}
       {selectionMode ? (
-        <View style={[styles.header, { backgroundColor: '#1e293b' }]}>
+        <View style={[styles.header, { backgroundColor: '#1e293b', paddingTop: Math.max(insets.top, 16) + 10 }]}>
             <View style={{flexDirection: 'row', alignItems: 'center'}}>
                 <TouchableOpacity onPress={() => { setSelectionMode(false); setSelectedItems(new Set()); }} style={{marginRight:15}}>
                     <MaterialCommunityIcons name="close" size={28} color="#94a3b8" />
@@ -1084,7 +1195,7 @@ export default function App() {
             </View>
         </View>
       ) : (
-        <View style={styles.header}>
+        <View style={[styles.header, { paddingTop: Math.max(insets.top, 16) + 10 }]}>
             <View style={{flexDirection: 'row', alignItems: 'center'}}>
                 {view !== 'gallery' && (
                     <TouchableOpacity onPress={() => setView('gallery')} style={{marginRight:15}}>
@@ -1228,7 +1339,7 @@ export default function App() {
 
             {/* Static bottom progress bar */}
             {uploadState.active && (
-                <View style={{ position: 'absolute', bottom: 85, left: 15, right: 15, backgroundColor: '#1e293b', padding: 15, borderRadius: 12, borderWidth: 1, borderColor: '#334155', elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84 }}>
+                <View style={{ position: 'absolute', bottom: Math.max(insets.bottom, 15) + 85, left: 15, right: 15, backgroundColor: '#1e293b', padding: 15, borderRadius: 12, borderWidth: 1, borderColor: '#334155', elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84 }}>
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                         <Text style={{ color: '#fff', fontSize: 14, fontWeight: 'bold', flex: 1 }}>
                             {isCancellingUpload ? 'Cancelando...' : `Subiendo ${uploadState.current} de ${uploadState.total}...`}
@@ -1264,7 +1375,7 @@ export default function App() {
             )}
 
             {/* Subida Flotante */}
-            <View style={styles.fabContainer}>
+            <View style={[styles.fabContainer, { bottom: Math.max(insets.bottom, 15) + 25 }]}>
                 {uploadMenuVisible && (
                     <View style={styles.uploadMenu}>
                         <TouchableOpacity style={styles.uploadMenuItem} onPress={handlePickDocument}>
@@ -1346,6 +1457,47 @@ export default function App() {
              <Text style={styles.statSub}>Total: {formatBytes(status?.vault?.total_size || 0)}</Text>
           </View>
 
+          {/* App Updates Card */}
+          <View style={styles.statCard}>
+             <View style={{flexDirection:'row', alignItems:'center', justifyContent:'space-between', marginBottom: 10}}>
+                <View style={{flexDirection:'row', alignItems:'center'}}>
+                   <MaterialCommunityIcons name="cellphone-arrow-down" size={22} color="#38bdf8" style={{marginRight:8}} />
+                   <Text style={styles.statLabel}>Actualizaciones App</Text>
+                </View>
+                <View style={styles.versionBadge}>
+                   <Text style={styles.versionBadgeText}>v{APP_VERSION}</Text>
+                </View>
+             </View>
+
+             <Text style={[styles.statSub, {marginTop: 0, marginBottom: 12}]}>
+                {updateInfo?.hasUpdate 
+                  ? `¡Nueva versión ${updateInfo.latestVersion} disponible!` 
+                  : `Versión instalada: v${APP_VERSION} (Android)`}
+             </Text>
+
+             <TouchableOpacity 
+                style={[styles.button, {paddingVertical: 12, backgroundColor: updateInfo?.hasUpdate ? '#10b981' : '#3b82f6'}]} 
+                onPress={() => updateInfo?.hasUpdate ? setUpdateModalVisible(true) : handleCheckUpdate(true)}
+                disabled={isCheckingUpdate}
+             >
+                {isCheckingUpdate ? (
+                   <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                   <View style={{flexDirection:'row', alignItems:'center', justifyContent:'center'}}>
+                      <MaterialCommunityIcons 
+                         name={updateInfo?.hasUpdate ? "arrow-down-bold-circle-outline" : "refresh"} 
+                         size={18} 
+                         color="#fff" 
+                         style={{marginRight: 6}}
+                      />
+                      <Text style={[styles.buttonText, {fontSize: 14}]}>
+                         {updateInfo?.hasUpdate ? 'Ver e Instalar Actualización' : 'Buscar Actualizaciones'}
+                      </Text>
+                   </View>
+                )}
+             </TouchableOpacity>
+          </View>
+
           <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
              <Text style={styles.logoutText}>Cerrar Sesión y Desvincular</Text>
           </TouchableOpacity>
@@ -1356,7 +1508,7 @@ export default function App() {
       {previewItem && (
           <Modal visible={true} transparent={true} animationType="fade" onRequestClose={() => setPreviewItem(null)}>
               <View style={styles.modalBg} {...panResponder.panHandlers}>
-                  <TouchableOpacity style={styles.modalClose} onPress={() => setPreviewItem(null)}>
+                  <TouchableOpacity style={[styles.modalClose, { top: Math.max(insets.top, 16) + 12 }]} onPress={() => setPreviewItem(null)}>
                       <Text style={styles.modalCloseText}>Cerrar</Text>
                   </TouchableOpacity>
                   
@@ -1446,7 +1598,7 @@ export default function App() {
                       }
                   })()}
 
-                  <View style={styles.modalActionsRow}>
+                  <View style={[styles.modalActionsRow, { bottom: Math.max(insets.bottom, 16) + 25 }]}>
                       <TouchableOpacity 
                         style={[styles.modalActionCircle, (!previewSrc) && styles.buttonDisabled]} 
                         onPress={handleDownload}
@@ -1515,7 +1667,7 @@ export default function App() {
            <Modal transparent={true} visible={true} animationType="none" onRequestClose={() => setDrawerOpen(false)}>
                <View style={styles.drawerContainer}>
                    <TouchableOpacity style={styles.drawerOverlay} onPress={() => setDrawerOpen(false)} />
-                   <View style={styles.drawerContent}>
+                   <View style={[styles.drawerContent, { paddingTop: Math.max(insets.top, 16) + 20, paddingBottom: Math.max(insets.bottom, 16) + 10 }]}>
                        <View style={styles.drawerHeader}>
                            <Text style={styles.drawerTitle}>Menu</Text>
                            <TouchableOpacity onPress={() => setDrawerOpen(false)}>
@@ -1816,57 +1968,170 @@ export default function App() {
             </Modal>
        )}
 
-       {/* Custom Gallery Picker Modal */}
-       <Modal visible={galleryVisible} animationType="slide" onRequestClose={() => setGalleryVisible(false)}>
-         <SafeAreaView style={{ flex: 1, backgroundColor: '#0f172a' }}>
-           <View style={styles.galleryHeader}>
-             <TouchableOpacity onPress={() => setGalleryVisible(false)} style={{ padding: 10 }}>
-               <MaterialCommunityIcons name="close" size={24} color="#fff" />
-             </TouchableOpacity>
-             <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>Select Media</Text>
-             <TouchableOpacity 
-               onPress={handleConfirmGallerySelection} 
-               style={{ padding: 10, opacity: selectedGalleryIds.size > 0 ? 1 : 0.5 }}
-               disabled={selectedGalleryIds.size === 0}
-             >
-               <Text style={{ color: '#3b82f6', fontSize: 16, fontWeight: 'bold' }}>
-                 Add {selectedGalleryIds.size > 0 ? `(${selectedGalleryIds.size})` : ''}
-               </Text>
-             </TouchableOpacity>
-           </View>
-           <FlatList
-             data={galleryAssets}
-             keyExtractor={(item) => item.id}
-             numColumns={3}
-             renderItem={({ item }) => {
-               const isSelected = selectedGalleryIds.has(item.id);
-               return (
-                 <TouchableOpacity 
-                   style={{ width: Dimensions.get('window').width / 3, height: Dimensions.get('window').width / 3, padding: 1 }}
-                   onPress={() => toggleGalleryAsset(item.id)}
-                 >
-                   <Image source={{ uri: item.uri }} style={{ width: '100%', height: '100%', backgroundColor: '#1e293b' }} />
-                   {item.mediaType === 'video' && (
-                     <View style={{ position: 'absolute', bottom: 5, right: 5, backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 4, borderRadius: 4 }}>
-                       <Text style={{ color: '#fff', fontSize: 10 }}>{Math.round(item.duration)}s</Text>
-                     </View>
-                   )}
-                   {isSelected && (
-                     <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(59, 130, 246, 0.4)', borderWidth: 3, borderColor: '#3b82f6', justifyContent: 'center', alignItems: 'center' }}>
-                       <MaterialCommunityIcons name="check-circle" size={32} color="#fff" />
-                     </View>
-                   )}
-                 </TouchableOpacity>
-               );
-             }}
-             onEndReached={() => loadGallery(true)}
-             onEndReachedThreshold={0.5}
-             ListFooterComponent={galleryLoading ? <ActivityIndicator size="large" color="#3b82f6" style={{ margin: 20 }} /> : null}
-           />
-         </SafeAreaView>
-       </Modal>
+        {/* Custom Gallery Picker Modal */}
+        <Modal visible={galleryVisible} animationType="slide" onRequestClose={() => setGalleryVisible(false)}>
+          <View style={{ flex: 1, backgroundColor: '#0f172a', paddingTop: insets.top, paddingBottom: insets.bottom }}>
+            <View style={styles.galleryHeader}>
+              <TouchableOpacity onPress={() => setGalleryVisible(false)} style={{ padding: 10 }}>
+                <MaterialCommunityIcons name="close" size={24} color="#fff" />
+              </TouchableOpacity>
+              <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>Select Media</Text>
+              <TouchableOpacity 
+                onPress={handleConfirmGallerySelection} 
+                style={{ padding: 10, opacity: selectedGalleryIds.size > 0 ? 1 : 0.5 }}
+                disabled={selectedGalleryIds.size === 0}
+              >
+                <Text style={{ color: '#3b82f6', fontSize: 16, fontWeight: 'bold' }}>
+                  Add {selectedGalleryIds.size > 0 ? `(${selectedGalleryIds.size})` : ''}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <FlatList
+              data={galleryAssets}
+              keyExtractor={(item) => item.id}
+              numColumns={3}
+              renderItem={({ item }) => {
+                const isSelected = selectedGalleryIds.has(item.id);
+                return (
+                  <TouchableOpacity 
+                    style={{ width: Dimensions.get('window').width / 3, height: Dimensions.get('window').width / 3, padding: 1 }}
+                    onPress={() => toggleGalleryAsset(item.id)}
+                  >
+                    <Image source={{ uri: item.uri }} style={{ width: '100%', height: '100%', backgroundColor: '#1e293b' }} />
+                    {item.mediaType === 'video' && (
+                      <View style={{ position: 'absolute', bottom: 5, right: 5, backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 4, borderRadius: 4 }}>
+                        <Text style={{ color: '#fff', fontSize: 10 }}>{Math.round(item.duration)}s</Text>
+                      </View>
+                    )}
+                    {isSelected && (
+                      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(59, 130, 246, 0.4)', borderWidth: 3, borderColor: '#3b82f6', justifyContent: 'center', alignItems: 'center' }}>
+                        <MaterialCommunityIcons name="check-circle" size={32} color="#fff" />
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                );
+              }}
+              onEndReached={() => loadGallery(true)}
+              onEndReachedThreshold={0.5}
+              ListFooterComponent={galleryLoading ? <ActivityIndicator size="large" color="#3b82f6" style={{ margin: 20 }} /> : null}
+            />
+          </View>
+        </Modal>
 
-    </SafeAreaView>
+        {/* In-App Update Modal */}
+        {updateModalVisible && updateInfo && (
+          <Modal visible={true} transparent={true} animationType="slide" onRequestClose={() => !updateDownloadState.downloading && setUpdateModalVisible(false)}>
+            <View style={styles.modalBg}>
+              <View style={[styles.promptCard, { maxWidth: 400, width: '90%', padding: 22 }]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+                  <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: '#1e3a8a', justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+                    <MaterialCommunityIcons name="rocket-launch" size={24} color="#38bdf8" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>Nueva versión disponible</Text>
+                    <Text style={{ color: '#38bdf8', fontSize: 13, fontWeight: '600' }}>
+                      {updateInfo.latestVersion} (Actual: v{APP_VERSION})
+                    </Text>
+                  </View>
+                </View>
+
+                {updateInfo.apkSize > 0 && (
+                  <Text style={{ color: '#94a3b8', fontSize: 12, marginBottom: 10 }}>
+                    Tamaño del archivo: {formatBytes(updateInfo.apkSize)}
+                  </Text>
+                )}
+
+                {/* Release notes scroll */}
+                <Text style={{ color: '#cbd5e1', fontSize: 12, fontWeight: 'bold', textTransform: 'uppercase', marginBottom: 6 }}>
+                  Novedades del parche:
+                </Text>
+                <ScrollView style={{ maxHeight: 160, backgroundColor: '#0f172a', padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#334155', marginBottom: 18 }}>
+                  <Text style={{ color: '#94a3b8', fontSize: 13, lineHeight: 18 }}>
+                    {updateInfo.releaseNotes}
+                  </Text>
+                </ScrollView>
+
+                {/* Download progress UI */}
+                {updateDownloadState.downloading && (
+                  <View style={{ marginBottom: 16 }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <Text style={{ color: '#38bdf8', fontSize: 13, fontWeight: '600' }}>Descargando APK...</Text>
+                      <Text style={{ color: '#fff', fontSize: 13, fontWeight: 'bold' }}>{updateDownloadState.percent}%</Text>
+                    </View>
+                    <View style={styles.progressBarBg}>
+                      <View style={[styles.progressBarFill, { width: `${updateDownloadState.percent}%`, backgroundColor: '#38bdf8' }]} />
+                    </View>
+                    <Text style={{ color: '#64748b', fontSize: 11, textAlign: 'center', marginTop: 4 }}>
+                      {formatBytes(updateDownloadState.downloadedBytes)} de {formatBytes(updateDownloadState.totalBytes)}
+                    </Text>
+                  </View>
+                )}
+
+                {/* Download Completed UI */}
+                {updateDownloadState.downloadedUri && (
+                  <View style={{ backgroundColor: '#064e3b', padding: 12, borderRadius: 8, marginBottom: 16, borderWidth: 1, borderColor: '#059669' }}>
+                    <Text style={{ color: '#34d399', fontSize: 13, fontWeight: '600', textAlign: 'center' }}>
+                      APK descargado correctamente. Pulsa "Instalar ahora" para continuar.
+                    </Text>
+                  </View>
+                )}
+
+                {/* Error message if any */}
+                {updateDownloadState.error && (
+                  <View style={{ backgroundColor: '#450a0a', padding: 10, borderRadius: 8, marginBottom: 16, borderWidth: 1, borderColor: '#dc2626' }}>
+                    <Text style={{ color: '#f87171', fontSize: 12, textAlign: 'center' }}>
+                      Error: {updateDownloadState.error}
+                    </Text>
+                  </View>
+                )}
+
+                {/* Action buttons */}
+                <View style={{ flexDirection: 'row', gap: 10 }}>
+                  {updateDownloadState.downloading ? (
+                    <TouchableOpacity 
+                      style={[styles.button, { flex: 1, backgroundColor: '#ef4444' }]} 
+                      onPress={handleCancelUpdateDownload}
+                    >
+                      <Text style={styles.buttonText}>Cancelar</Text>
+                    </TouchableOpacity>
+                  ) : updateDownloadState.downloadedUri ? (
+                    <>
+                      <TouchableOpacity 
+                        style={[styles.button, { flex: 1, backgroundColor: '#334155' }]} 
+                        onPress={() => setUpdateModalVisible(false)}
+                      >
+                        <Text style={styles.buttonText}>Cerrar</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity 
+                        style={[styles.button, { flex: 1, backgroundColor: '#10b981' }]} 
+                        onPress={() => updater.installApk(updateDownloadState.downloadedUri)}
+                      >
+                        <Text style={styles.buttonText}>Instalar ahora</Text>
+                      </TouchableOpacity>
+                    </>
+                  ) : (
+                    <>
+                      <TouchableOpacity 
+                        style={[styles.button, { flex: 1, backgroundColor: '#334155' }]} 
+                        onPress={() => setUpdateModalVisible(false)}
+                      >
+                        <Text style={styles.buttonText}>Más tarde</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity 
+                        style={[styles.button, { flex: 1, backgroundColor: '#3b82f6' }]} 
+                        onPress={handleStartDownloadUpdate}
+                      >
+                        <Text style={styles.buttonText}>Actualizar</Text>
+                      </TouchableOpacity>
+                    </>
+                  )}
+                </View>
+              </View>
+            </View>
+          </Modal>
+        )}
+
+    </View>
   );
 }
 
@@ -2006,7 +2271,7 @@ const styles = StyleSheet.create({
   buttonScan: { backgroundColor: '#10b981', borderRadius: 12, padding: 18, alignItems: 'center', marginBottom: 20 },
   buttonDisabled: { backgroundColor: '#475569' },
   errorText: { color: '#ef4444', marginBottom: 15, textAlign: 'center', fontWeight: 'bold' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingTop: 50, borderBottomWidth: 1, borderBottomColor: '#1e293b' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingBottom: 15, borderBottomWidth: 1, borderBottomColor: '#1e293b' },
   headerTitle: { fontSize: 22, fontWeight: 'bold', color: '#fff' },
   folderSelectorContainer: { borderBottomWidth: 1, borderBottomColor: '#1e293b' },
   folderSelector: { flexDirection: 'row', alignItems: 'center', padding: 10 },
@@ -2040,18 +2305,18 @@ const styles = StyleSheet.create({
   dividerText: { backgroundColor: '#0f172a', paddingHorizontal: 10, position: 'absolute', top: -10, color: '#64748b', fontSize: 11, fontWeight: 'bold' },
   scannerOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' },
   scannerBox: { width: 250, height: 250, borderWidth: 2, borderColor: '#3b82f6', borderRadius: 12 },
-  buttonCancelScanner: { position: 'absolute', bottom: 50, backgroundColor: '#ef4444', padding: 15, borderRadius: 12, paddingHorizontal: 30 },
-  fabContainer: { position: 'absolute', bottom: 30, right: 30, alignItems: 'center' },
+  buttonCancelScanner: { position: 'absolute', backgroundColor: '#ef4444', padding: 15, borderRadius: 12, paddingHorizontal: 30 },
+  fabContainer: { position: 'absolute', right: 30, alignItems: 'center' },
   fab: { width: 60, height: 60, borderRadius: 30, backgroundColor: '#3b82f6', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: {width:0,height:4}, shadowOpacity:0.3, shadowRadius:4, elevation:5 },
   fabIcon: { fontSize: 28, color: '#fff' },
   galleryHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 15, borderBottomWidth: 1, borderBottomColor: '#1e293b', backgroundColor: '#0f172a' },
   modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', alignItems: 'center' },
-  modalClose: { position: 'absolute', top: 50, right: 20, zIndex: 10, padding: 10, backgroundColor: '#1e293b', borderRadius: 8 },
+  modalClose: { position: 'absolute', right: 20, zIndex: 10, padding: 10, backgroundColor: '#1e293b', borderRadius: 8 },
   modalCloseText: { color: '#fff', fontWeight: 'bold' },
   modalImage: { width: '100%', height: '100%' },
   modalImageContainer: { width: '90%', height: '70%', borderRadius: 12, overflow: 'hidden', backgroundColor: '#1e293b', justifyContent: 'center', alignItems: 'center' },
   spinner: { position: 'absolute' },
-  modalActionsRow: { flexDirection: 'row', gap: 15, position: 'absolute', bottom: 50, width: '90%', justifyContent: 'center' },
+  modalActionsRow: { flexDirection: 'row', gap: 15, position: 'absolute', width: '90%', justifyContent: 'center' },
   modalSmallBtn: { flex: 1, maxWidth: 180, backgroundColor: '#3b82f6', padding: 18, borderRadius: 16, alignItems: 'center' },
   modalActionCircle: { width: 60, height: 60, borderRadius: 30, backgroundColor: '#3b82f6', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: {width:0,height:2}, shadowOpacity:0.3, shadowRadius:4, elevation:5 },
   promptCard: { backgroundColor: '#1e293b', padding: 25, borderRadius: 16, width: '85%', borderWidth: 1, borderColor: '#334155' },
@@ -2075,7 +2340,7 @@ const styles = StyleSheet.create({
   // Drawer Styles
   drawerContainer: { flex: 1, flexDirection: 'row' },
   drawerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' },
-  drawerContent: { width: 280, height: '100%', backgroundColor: '#1e293b', padding: 25, paddingTop: 60 },
+  drawerContent: { width: 280, height: '100%', backgroundColor: '#1e293b', paddingHorizontal: 25 },
   drawerHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 40 },
   drawerTitle: { fontSize: 24, fontWeight: 'bold', color: '#fff' },
   drawerUserInfo: { marginBottom: 30 },
@@ -2127,7 +2392,19 @@ const styles = StyleSheet.create({
   infoLabel: { color: '#64748b', fontSize: 12, textTransform: 'uppercase', fontWeight: 'bold', marginBottom: 2 },
   infoValue: { color: '#fff', fontSize: 16 },
   
+  // App Version Badge
+  versionBadge: { backgroundColor: '#1e3a8a', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 12, borderWidth: 1, borderColor: '#38bdf8' },
+  versionBadgeText: { color: '#38bdf8', fontSize: 11, fontWeight: 'bold' },
+
   uploadMenu: { position: 'absolute', bottom: 70, right: 0, backgroundColor: '#1e293b', borderRadius: 12, padding: 8, borderWidth: 1, borderColor: '#334155', elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84, minWidth: 160 },
   uploadMenuItem: { flexDirection: 'row', alignItems: 'center', padding: 12, gap: 10 },
   uploadMenuText: { color: '#fff', fontSize: 14, fontWeight: '500' },
 });
+
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <MainApp />
+    </SafeAreaProvider>
+  );
+}
