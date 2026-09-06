@@ -32,7 +32,7 @@ import { AppState } from 'react-native';
 import { useShareIntent } from 'expo-share-intent';
 import * as Notifications from 'expo-notifications';
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.0.1';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -1224,6 +1224,7 @@ function MainApp() {
                 <FlatList 
                     horizontal
                     showsHorizontalScrollIndicator={false}
+                    style={{ flex: 1 }}
                     data={['root', ...new Set(items.map(i => {
                         // Named folders are those where context isn't 'root'
                         return i.context && i.context !== 'root' ? i.context : null;
@@ -1246,11 +1247,9 @@ function MainApp() {
                         </TouchableOpacity>
                     )}
                 />
-                {role === 'admin' && (
-                    <TouchableOpacity style={styles.addFolderBtn} onPress={() => setNewFolderModal(true)}>
-                        <MaterialCommunityIcons name="plus" size={24} color="#fff" />
-                    </TouchableOpacity>
-                )}
+                <TouchableOpacity style={styles.addFolderBtn} onPress={() => setNewFolderModal(true)}>
+                    <MaterialCommunityIcons name="plus" size={24} color="#fff" />
+                </TouchableOpacity>
             </View>
 
             {/* Timeline Filters (Year/Month) */}
@@ -2305,9 +2304,8 @@ const styles = StyleSheet.create({
   dividerText: { backgroundColor: '#0f172a', paddingHorizontal: 10, position: 'absolute', top: -10, color: '#64748b', fontSize: 11, fontWeight: 'bold' },
   scannerOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' },
   scannerBox: { width: 250, height: 250, borderWidth: 2, borderColor: '#3b82f6', borderRadius: 12 },
-  buttonCancelScanner: { position: 'absolute', backgroundColor: '#ef4444', padding: 15, borderRadius: 12, paddingHorizontal: 30 },
-  fabContainer: { position: 'absolute', right: 30, alignItems: 'center' },
-  fab: { width: 60, height: 60, borderRadius: 30, backgroundColor: '#3b82f6', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: {width:0,height:4}, shadowOpacity:0.3, shadowRadius:4, elevation:5 },
+  fabContainer: { position: 'absolute', right: 25, alignItems: 'center', zIndex: 999, elevation: 10 },
+  fab: { width: 60, height: 60, borderRadius: 30, backgroundColor: '#3b82f6', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: {width:0,height:4}, shadowOpacity:0.3, shadowRadius:4, elevation:8, zIndex: 1000 },
   fabIcon: { fontSize: 28, color: '#fff' },
   galleryHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 15, borderBottomWidth: 1, borderBottomColor: '#1e293b', backgroundColor: '#0f172a' },
   modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', alignItems: 'center' },
@@ -2396,7 +2394,7 @@ const styles = StyleSheet.create({
   versionBadge: { backgroundColor: '#1e3a8a', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 12, borderWidth: 1, borderColor: '#38bdf8' },
   versionBadgeText: { color: '#38bdf8', fontSize: 11, fontWeight: 'bold' },
 
-  uploadMenu: { position: 'absolute', bottom: 70, right: 0, backgroundColor: '#1e293b', borderRadius: 12, padding: 8, borderWidth: 1, borderColor: '#334155', elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84, minWidth: 160 },
+  uploadMenu: { position: 'absolute', bottom: 70, right: 0, backgroundColor: '#1e293b', borderRadius: 12, padding: 8, borderWidth: 1, borderColor: '#334155', elevation: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84, minWidth: 160, zIndex: 1001 },
   uploadMenuItem: { flexDirection: 'row', alignItems: 'center', padding: 12, gap: 10 },
   uploadMenuText: { color: '#fff', fontSize: 14, fontWeight: '500' },
 });
