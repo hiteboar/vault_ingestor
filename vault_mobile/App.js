@@ -32,7 +32,7 @@ import { AppState } from 'react-native';
 import { useShareIntent } from 'expo-share-intent';
 import * as Notifications from 'expo-notifications';
 
-const APP_VERSION = '1.0.2';
+const APP_VERSION = '1.0.3';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -144,6 +144,7 @@ function MainApp() {
   const [updateInfo, setUpdateInfo] = useState(null);
   const [updateModalVisible, setUpdateModalVisible] = useState(false);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [isInstalling, setIsInstalling] = useState(false);
   const [updateDownloadState, setUpdateDownloadState] = useState({
     downloading: false,
     percent: 0,
@@ -183,6 +184,38 @@ function MainApp() {
     }
   };
 
+  const handleInstallUpdate = async (uriToInstall) => {
+    const targetUri = uriToInstall || updateDownloadState.downloadedUri;
+    if (!targetUri) {
+      Alert.alert('Error', 'No se ha encontrado el archivo descargado. Vuelve a descargarlo.');
+      return;
+    }
+
+    setIsInstalling(true);
+    try {
+      await updater.installApk(targetUri);
+    } catch (err) {
+      console.error('Error al intentar instalar actualización:', err);
+      Alert.alert(
+        'Instalación de actualización',
+        `No se pudo abrir el instalador automáticamente (${err.message || 'Fallo desconocido'}).\n\nSi es la primera vez, asegúrate de activar "Instalar aplicaciones desconocidas" para Vault Mobile en los Ajustes del sistema.`,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Abrir Ajustes',
+            onPress: () => updater.openInstallPermissionSettings(),
+          },
+          {
+            text: 'Abrir con otra app',
+            onPress: () => updater.shareApk(targetUri),
+          },
+        ]
+      );
+    } finally {
+      setIsInstalling(false);
+    }
+  };
+
   const handleStartDownloadUpdate = async () => {
     if (!updateInfo || !updateInfo.apkUrl) {
       Alert.alert('Error', 'No hay enlace de descarga disponible para el APK.');
@@ -215,7 +248,7 @@ function MainApp() {
       }));
 
       // Trigger installer automatically
-      await updater.installApk(localUri);
+      await handleInstallUpdate(localUri);
     } catch (err) {
       console.error('Error downloading/installing update:', err);
       setUpdateDownloadState(prev => ({
@@ -2317,14 +2350,23 @@ function MainApp() {
                       <TouchableOpacity 
                         style={[styles.button, { flex: 1, backgroundColor: '#334155' }]} 
                         onPress={() => setUpdateModalVisible(false)}
+                        disabled={isInstalling}
                       >
                         <Text style={styles.buttonText}>Cerrar</Text>
                       </TouchableOpacity>
                       <TouchableOpacity 
-                        style={[styles.button, { flex: 1, backgroundColor: '#10b981' }]} 
-                        onPress={() => updater.installApk(updateDownloadState.downloadedUri)}
+                        style={[styles.button, { flex: 1, backgroundColor: '#10b981', opacity: isInstalling ? 0.7 : 1 }]} 
+                        onPress={() => handleInstallUpdate()}
+                        disabled={isInstalling}
                       >
-                        <Text style={styles.buttonText}>Instalar ahora</Text>
+                        {isInstalling ? (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+                            <ActivityIndicator size="small" color="#fff" style={{ marginRight: 6 }} />
+                            <Text style={styles.buttonText}>Instalando...</Text>
+                          </View>
+                        ) : (
+                          <Text style={styles.buttonText}>Instalar ahora</Text>
+                        )}
                       </TouchableOpacity>
                     </>
                   ) : (

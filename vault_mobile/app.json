@@ -3,7 +3,7 @@
     "name": "Vault Mobile",
     "slug": "vault-mobile",
     "scheme": "vault-mobile",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "sdkVersion": "54.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
@@ -22,7 +22,7 @@
         "backgroundColor": "#0f172a"
       },
       "package": "com.pccom.vaultingestor",
-      "versionCode": 3,
+      "versionCode": 4,
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.READ_EXTERNAL_STORAGE",

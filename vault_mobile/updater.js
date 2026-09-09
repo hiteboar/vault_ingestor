@@ -1,5 +1,6 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import * as IntentLauncher from 'expo-intent-launcher';
+import * as Sharing from 'expo-sharing';
 import { Platform } from 'react-native';
 
 const GITHUB_REPO = 'hiteboar/vault_ingestor';
@@ -155,12 +156,80 @@ export const installApk = async (localFileUri) => {
     throw new Error('La instalación automática de APK solo es compatible con Android.');
   }
 
+  if (!localFileUri) {
+    throw new Error('No se ha proporcionado la ruta del archivo APK.');
+  }
+
+  // Verificar que el archivo existe localmente y es accesible
+  const fileInfo = await FileSystem.getInfoAsync(localFileUri);
+  if (!fileInfo.exists || fileInfo.size === 0) {
+    throw new Error('El archivo APK descargado no existe o está incompleto. Por favor, descárgalo de nuevo.');
+  }
+
   // Obtener content:// URI compatible con el FileProvider de Android
   const contentUri = await FileSystem.getContentUriAsync(localFileUri);
   
-  await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
-    data: contentUri,
-    flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
-    type: 'application/vnd.android.package-archive',
-  });
+  // FLAG_GRANT_READ_URI_PERMISSION (1) | FLAG_ACTIVITY_NEW_TASK (268435456 = 0x10000000)
+  const flags = 1 | 268435456;
+
+  try {
+    await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+      data: contentUri,
+      flags,
+      type: 'application/vnd.android.package-archive',
+    });
+  } catch (err) {
+    console.warn('[Updater] Intento con flags combinados falló, probando fallback...', err);
+    try {
+      // Fallback con flags básicos
+      await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+        data: contentUri,
+        flags: 1,
+        type: 'application/vnd.android.package-archive',
+      });
+    } catch (fallbackErr) {
+      console.error('[Updater] Error definitivo al lanzar instalador:', fallbackErr);
+      throw new Error(err.message || fallbackErr.message || 'No se pudo iniciar el instalador de paquetes');
+    }
+  }
+};
+
+/**
+ * Abre la pantalla de ajustes de Android para permitir la instalación de apps de fuentes desconocidas.
+ */
+export const openInstallPermissionSettings = async () => {
+  if (Platform.OS !== 'android') return;
+  try {
+    await IntentLauncher.startActivityAsync(
+      'android.settings.MANAGE_UNKNOWN_APP_SOURCES',
+      { data: 'package:com.pccom.vaultingestor' }
+    );
+  } catch (e) {
+    try {
+      await IntentLauncher.startActivityAsync(
+        'android.settings.APPLICATION_DETAILS_SETTINGS',
+        { data: 'package:com.pccom.vaultingestor' }
+      );
+    } catch (innerErr) {
+      console.warn('[Updater] No se pudo abrir la pantalla de ajustes:', innerErr);
+    }
+  }
+};
+
+/**
+ * Fallback para abrir o compartir el archivo APK mediante el diálogo nativo del sistema.
+ */
+export const shareApk = async (localFileUri) => {
+  try {
+    const isAvailable = await Sharing.isAvailableAsync();
+    if (isAvailable && localFileUri) {
+      await Sharing.shareAsync(localFileUri, {
+        mimeType: 'application/vnd.android.package-archive',
+        dialogTitle: 'Instalar actualización de Vault',
+        UTI: 'com.android.package-archive',
+      });
+    }
+  } catch (err) {
+    console.warn('[Updater] Error en shareApk:', err);
+  }
 };
