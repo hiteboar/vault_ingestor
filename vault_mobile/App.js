@@ -32,7 +32,7 @@ import { AppState } from 'react-native';
 import { useShareIntent } from 'expo-share-intent';
 import * as Notifications from 'expo-notifications';
 
-const APP_VERSION = '1.0.1';
+const APP_VERSION = '1.0.2';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -83,8 +83,21 @@ function MainApp() {
   const [showSortMenu, setShowSortMenu] = useState(false);
   
   // Modals state
+  const initialUploadState = {
+    active: false,
+    current: 0,
+    total: 0,
+    currentFileName: '',
+    filePercent: 0,
+    fileLoadedBytes: 0,
+    fileTotalBytes: 0,
+    overallPercent: 0,
+    totalLoadedBytes: 0,
+    totalBatchBytes: 0,
+    statusText: ''
+  };
   const [uploadMenuVisible, setUploadMenuVisible] = useState(false);
-  const [uploadState, setUploadState] = useState({ active: false, current: 0, total: 0, percent: 0 });
+  const [uploadState, setUploadState] = useState(initialUploadState);
   const [isCancellingUpload, setIsCancellingUpload] = useState(false);
   const activeUploadCancelRef = React.useRef(null); // holds { cancel: fn } for current upload
   
@@ -113,7 +126,8 @@ function MainApp() {
   const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntent();
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareFiles, setShareFiles] = useState([]);
-  const [shareUploadState, setShareUploadState] = useState({ active: false, current: 0, total: 0, percent: 0 });
+  const [shareUploadState, setShareUploadState] = useState(initialUploadState);
+  const activeShareUploadCancelRef = React.useRef(null);
   const [selectedShareFolder, setSelectedShareFolder] = useState('root');
   
   // Date filters for timeline
@@ -520,11 +534,41 @@ function MainApp() {
           finalStatus = status;
       }
 
-      setUploadState({ active: true, current: 0, total: assets.length, percent: 0 });
+      // Pre-calculate total queue size in bytes
+      let totalBatchBytes = 0;
+      const assetSizes = [];
+      for (let i = 0; i < assets.length; i++) {
+          let size = assets[i].size || 0;
+          if (!size && assets[i].uri) {
+              try {
+                  const info = await FileSystem.getInfoAsync(assets[i].uri);
+                  if (info.exists && typeof info.size === 'number' && info.size > 0) {
+                      size = info.size;
+                  }
+              } catch (_) {}
+          }
+          assetSizes.push(size);
+          totalBatchBytes += size;
+      }
+
+      setUploadState({
+          active: true,
+          current: 0,
+          total: assets.length,
+          currentFileName: '',
+          filePercent: 0,
+          fileLoadedBytes: 0,
+          fileTotalBytes: 0,
+          overallPercent: 0,
+          totalLoadedBytes: 0,
+          totalBatchBytes: totalBatchBytes,
+          statusText: 'Preparando subida...'
+      });
       setIsCancellingUpload(false);
       let successCount = 0;
       let anyFallback = false;
       let cancelled = false;
+      let previousCompletedBytes = 0;
       const totalFiles = assets.length;
       
       if (finalStatus === 'granted') {
@@ -539,6 +583,7 @@ function MainApp() {
           const asset = assets[i];
           const mimeType = asset.mimeType || asset.type || 'application/octet-stream';
           let filename = asset.name || asset.fileName || asset.uri.split('/').pop() || 'upload.bin';
+          const currentFileExpectedSize = assetSizes[i] || 0;
           
           // Ensure filename has a valid extension if we know the mimeType
           if (!filename.includes('.') || filename.endsWith('.tmp') || filename.endsWith('.bin')) {
@@ -568,7 +613,15 @@ function MainApp() {
               }
           }
 
-          setUploadState(prev => ({ ...prev, current: i + 1, percent: 0 }));
+          setUploadState(prev => ({
+              ...prev,
+              current: i + 1,
+              currentFileName: filename,
+              filePercent: 0,
+              fileLoadedBytes: 0,
+              fileTotalBytes: currentFileExpectedSize,
+              statusText: 'Iniciando subida...'
+          }));
           
           // Check for cancellation before each file
           if (cancelled) break;
@@ -585,12 +638,53 @@ function MainApp() {
                   originalDate = new Date(asset.creationTime * (asset.creationTime > 1e11 ? 1 : 1000)).toISOString();
               }
                   
-              const resp = await api.uploadFile(asset.uri, filename, mimeType, currentFolder, originalDate, (pct) => {
-                  setUploadState(prev => ({ ...prev, percent: pct }));
-              }, (cancelFn) => { activeUploadCancelRef.current = cancelFn; });
+              const resp = await api.uploadFile(
+                  asset.uri, 
+                  filename, 
+                  mimeType, 
+                  currentFolder, 
+                  originalDate, 
+                  (prog) => {
+                      let filePct = 0;
+                      let fileLoaded = 0;
+                      let fileTot = currentFileExpectedSize;
+                      let statusText = 'Subiendo...';
+
+                      if (typeof prog === 'number') {
+                          filePct = prog;
+                          fileLoaded = Math.round((prog / 100) * (fileTot || 1));
+                      } else if (prog && typeof prog === 'object') {
+                          filePct = prog.percent || 0;
+                          fileLoaded = prog.loadedBytes || 0;
+                          fileTot = prog.totalBytes || fileTot;
+                          if (prog.status === 'processing') {
+                              statusText = 'Procesando en servidor...';
+                          } else if (prog.currentChunk && prog.totalChunks) {
+                              statusText = `Subiendo parte ${prog.currentChunk} de ${prog.totalChunks}...`;
+                          }
+                      }
+
+                      const totalLoaded = previousCompletedBytes + fileLoaded;
+                      const overallPercent = totalBatchBytes > 0 
+                          ? Math.min(100, Math.round((totalLoaded / totalBatchBytes) * 100))
+                          : filePct;
+
+                      setUploadState(prev => ({
+                          ...prev,
+                          filePercent: filePct,
+                          fileLoadedBytes: fileLoaded,
+                          fileTotalBytes: fileTot,
+                          totalLoadedBytes: totalLoaded,
+                          overallPercent,
+                          statusText
+                      }));
+                  }, 
+                  (cancelFn) => { activeUploadCancelRef.current = cancelFn; }
+              );
               activeUploadCancelRef.current = null;
               if (resp && resp.fallback_used) anyFallback = true;
               successCount++;
+              previousCompletedBytes += currentFileExpectedSize;
               
               if (finalStatus === 'granted' && (successCount % Math.max(1, Math.floor(totalFiles/10)) === 0 || successCount === totalFiles)) {
                   await Notifications.scheduleNotificationAsync({
@@ -603,28 +697,34 @@ function MainApp() {
                   });
               }
           } catch(e) {
+              activeUploadCancelRef.current = null;
               if (e.message && e.message.includes('cancel')) {
                   cancelled = true;
+              } else if (e.message && e.message.includes('Conexión perdida')) {
+                  Alert.alert("Error de conexión", e.message);
+                  cancelled = true; // Stop remaining queue when connection is permanently lost
               } else {
-                  alert(`Error uploading ${filename}: ${e.message}`);
+                  Alert.alert("Error de subida", `Error al subir ${filename}: ${e.message}`);
               }
           }
       }
       
       activeUploadCancelRef.current = null;
       setIsCancellingUpload(false);
-      setUploadState({ active: false, current: 0, total: 0, percent: 0 });
+      setUploadState(initialUploadState);
       loadData();
       if (successCount > 0 && successCount < assets.length) {
           if (anyFallback) {
               Alert.alert("Carga parcial con advertencias", `Se subieron ${successCount} de ${assets.length} archivos, pero algunos se registraron con la fecha actual.`);
           } else {
-              alert(`Uploaded ${successCount} of ${assets.length} files successfully.`);
+              Alert.alert("Carga parcial", `Se subieron ${successCount} de ${assets.length} archivos correctamente.`);
           }
       } else if (successCount === assets.length && anyFallback) {
           Alert.alert("Carga con advertencias", "Todos los archivos se subieron, pero algunos no contenían fecha original y se registraron con la actual.");
       }
-  };  const handleShareUpload = async () => {
+  };
+
+  const handleShareUpload = async () => {
       if (!shareFiles || shareFiles.length === 0) return;
       
       const assets = shareFiles;
@@ -635,10 +735,43 @@ function MainApp() {
           finalStatus = status;
       }
 
-      setShareUploadState({ active: true, current: 0, total: assets.length, percent: 0 });
+      // Pre-calculate file sizes to provide accurate byte progress across the queue
+      const assetSizes = [];
+      let totalBatchBytes = 0;
+      for (const asset of assets) {
+          let size = asset.fileSize || asset.size || 0;
+          if (!size && asset.path) {
+              try {
+                  const safePath = asset.path.startsWith('file://') ? asset.path : `file://${asset.path}`;
+                  const info = await FileSystem.getInfoAsync(safePath);
+                  if (info.exists && info.size) size = info.size;
+              } catch (err) {
+                  // ignore
+              }
+          }
+          assetSizes.push(size);
+          totalBatchBytes += size;
+      }
+
+      setShareUploadState({
+          active: true,
+          current: 0,
+          total: assets.length,
+          currentFileName: '',
+          filePercent: 0,
+          fileLoadedBytes: 0,
+          fileTotalBytes: 0,
+          overallPercent: 0,
+          totalLoadedBytes: 0,
+          totalBatchBytes,
+          statusText: 'Iniciando subida...'
+      });
+
       let successCount = 0;
       let anyFallback = false;
       const totalFiles = assets.length;
+      let previousCompletedBytes = 0;
+      let cancelled = false;
       
       if (finalStatus === 'granted') {
           await Notifications.scheduleNotificationAsync({
@@ -650,6 +783,7 @@ function MainApp() {
       
       for (let i = 0; i < assets.length; i++) {
           const asset = assets[i];
+          const currentFileExpectedSize = assetSizes[i] || 0;
           const mimeType = asset.mimeType || asset.type || 'application/octet-stream';
           let filename = asset.fileName || (asset.path ? asset.path.split('/').pop() : null) || `shared_${Date.now()}.bin`;
           
@@ -681,7 +815,17 @@ function MainApp() {
               }
           }
 
-          setShareUploadState(prev => ({ ...prev, current: i + 1, percent: 0 }));
+          setShareUploadState(prev => ({
+              ...prev,
+              current: i + 1,
+              currentFileName: filename,
+              filePercent: 0,
+              fileLoadedBytes: 0,
+              fileTotalBytes: currentFileExpectedSize,
+              statusText: 'Iniciando subida...'
+          }));
+
+          if (cancelled) break;
 
           try {
               let originalDate = asset.customDate || null;
@@ -696,12 +840,47 @@ function MainApp() {
                   mimeType, 
                   selectedShareFolder, 
                   originalDate, 
-                  (pct) => {
-                      setShareUploadState(prev => ({ ...prev, percent: pct }));
-                  }
+                  (prog) => {
+                      let filePct = 0;
+                      let fileLoaded = 0;
+                      let fileTot = currentFileExpectedSize;
+                      let statusText = 'Subiendo...';
+
+                      if (typeof prog === 'number') {
+                          filePct = prog;
+                          fileLoaded = Math.round((prog / 100) * (fileTot || 1));
+                      } else if (prog && typeof prog === 'object') {
+                          filePct = prog.percent || 0;
+                          fileLoaded = prog.loadedBytes || 0;
+                          fileTot = prog.totalBytes || fileTot;
+                          if (prog.status === 'processing') {
+                              statusText = 'Procesando en servidor...';
+                          } else if (prog.currentChunk && prog.totalChunks) {
+                              statusText = `Subiendo parte ${prog.currentChunk} de ${prog.totalChunks}...`;
+                          }
+                      }
+
+                      const totalLoaded = previousCompletedBytes + fileLoaded;
+                      const overallPercent = totalBatchBytes > 0 
+                          ? Math.min(100, Math.round((totalLoaded / totalBatchBytes) * 100))
+                          : filePct;
+
+                      setShareUploadState(prev => ({
+                          ...prev,
+                          filePercent: filePct,
+                          fileLoadedBytes: fileLoaded,
+                          fileTotalBytes: fileTot,
+                          totalLoadedBytes: totalLoaded,
+                          overallPercent,
+                          statusText
+                      }));
+                  },
+                  (cancelFn) => { activeShareUploadCancelRef.current = cancelFn; }
               );
+              activeShareUploadCancelRef.current = null;
               if (resp && resp.fallback_used) anyFallback = true;
               successCount++;
+              previousCompletedBytes += currentFileExpectedSize;
               
               if (finalStatus === 'granted' && (successCount % Math.max(1, Math.floor(totalFiles/10)) === 0 || successCount === totalFiles)) {
                   await Notifications.scheduleNotificationAsync({
@@ -714,11 +893,20 @@ function MainApp() {
                   });
               }
           } catch(e) {
-              alert(`Error uploading shared file ${filename}: ${e.message}`);
+              activeShareUploadCancelRef.current = null;
+              if (e.message && e.message.includes('cancel')) {
+                  cancelled = true;
+              } else if (e.message && e.message.includes('Conexión perdida')) {
+                  Alert.alert("Error de conexión", e.message);
+                  cancelled = true;
+              } else {
+                  Alert.alert("Error de subida", `Error al subir ${filename}: ${e.message}`);
+              }
           }
       }
 
-      setShareUploadState({ active: false, current: 0, total: 0, percent: 0 });
+      activeShareUploadCancelRef.current = null;
+      setShareUploadState(initialUploadState);
       setShowShareModal(false);
       resetShareIntent();
       loadData();
@@ -727,13 +915,13 @@ function MainApp() {
           if (anyFallback) {
               Alert.alert("Carga completada con advertencias", "Todos los archivos se subieron correctamente, pero algunos no contenían fecha original y se registraron con la actual.");
           } else {
-              Alert.alert("Success", "All shared files uploaded successfully!");
+              Alert.alert("Subida completada", "Todos los archivos compartidos se subieron correctamente.");
           }
       } else if (successCount > 0) {
           if (anyFallback) {
               Alert.alert("Carga parcial con advertencias", `Se subieron ${successCount} de ${assets.length} archivos, pero algunos se registraron con la fecha actual.`);
           } else {
-              Alert.alert("Partial Success", `Uploaded ${successCount} of ${assets.length} files successfully.`);
+              Alert.alert("Subida parcial", `Se subieron ${successCount} de ${assets.length} archivos correctamente.`);
           }
       }
   };
@@ -1338,38 +1526,48 @@ function MainApp() {
 
             {/* Static bottom progress bar */}
             {uploadState.active && (
-                <View style={{ position: 'absolute', bottom: Math.max(insets.bottom, 15) + 85, left: 15, right: 15, backgroundColor: '#1e293b', padding: 15, borderRadius: 12, borderWidth: 1, borderColor: '#334155', elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84 }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                        <Text style={{ color: '#fff', fontSize: 14, fontWeight: 'bold', flex: 1 }}>
-                            {isCancellingUpload ? 'Cancelando...' : `Subiendo ${uploadState.current} de ${uploadState.total}...`}
+                <View style={{ position: 'absolute', bottom: Math.max(insets.bottom, 15) + 85, left: 15, right: 15, backgroundColor: '#1e293b', padding: 14, borderRadius: 12, borderWidth: 1, borderColor: '#334155', elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.35, shadowRadius: 4, zIndex: 100 }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                        <Text style={{ color: '#fff', fontSize: 13, fontWeight: 'bold', flex: 1, marginRight: 8 }} numberOfLines={1} ellipsizeMode="middle">
+                            {isCancellingUpload ? 'Cancelando...' : `(${uploadState.current}/${uploadState.total}) ${uploadState.currentFileName || 'Archivo'}`}
                         </Text>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                            <Text style={{ color: '#3b82f6', fontSize: 14, fontWeight: 'bold' }}>{uploadState.percent}%</Text>
-                            <TouchableOpacity
-                                onPress={() => {
-                                    Alert.alert(
-                                        'Cancelar subida',
-                                        '¿Seguro que quieres cancelar la subida de archivos pendientes?',
-                                        [
-                                            { text: 'No', style: 'cancel' },
-                                            { text: 'Sí, cancelar', style: 'destructive', onPress: () => {
-                                                setIsCancellingUpload(true);
-                                                if (activeUploadCancelRef.current) {
-                                                    activeUploadCancelRef.current();
-                                                }
-                                            }}
-                                        ]
-                                    );
-                                }}
-                                style={{ backgroundColor: '#ef4444', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 4 }}
-                            >
-                                <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>✕ Cancelar</Text>
-                            </TouchableOpacity>
-                        </View>
+                        <TouchableOpacity
+                            onPress={() => {
+                                Alert.alert(
+                                    'Cancelar subida',
+                                    '¿Seguro que quieres cancelar la subida de archivos pendientes?',
+                                    [
+                                        { text: 'No', style: 'cancel' },
+                                        { text: 'Sí, cancelar', style: 'destructive', onPress: () => {
+                                            setIsCancellingUpload(true);
+                                            if (activeUploadCancelRef.current) {
+                                                activeUploadCancelRef.current();
+                                            }
+                                        }}
+                                    ]
+                                );
+                            }}
+                            style={{ backgroundColor: '#ef4444', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 4 }}
+                        >
+                            <Text style={{ color: '#fff', fontSize: 11, fontWeight: 'bold' }}>✕ Cancelar</Text>
+                        </TouchableOpacity>
                     </View>
+                    
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                        <Text style={{ color: '#94a3b8', fontSize: 11 }}>{uploadState.statusText || 'Subiendo...'}</Text>
+                        <Text style={{ color: '#3b82f6', fontSize: 13, fontWeight: 'bold' }}>
+                            {uploadState.overallPercent || uploadState.filePercent || 0}%
+                        </Text>
+                    </View>
+                    
                     <View style={{ height: 6, backgroundColor: '#334155', borderRadius: 3, overflow: 'hidden' }}>
-                        <View style={{ width: `${uploadState.percent}%`, height: '100%', backgroundColor: isCancellingUpload ? '#ef4444' : '#3b82f6' }} />
+                        <View style={{ width: `${Math.min(100, Math.max(0, uploadState.overallPercent || uploadState.filePercent || 0))}%`, height: '100%', backgroundColor: isCancellingUpload ? '#ef4444' : '#3b82f6' }} />
                     </View>
+
+                    <Text style={{ color: '#94a3b8', fontSize: 11, marginTop: 6 }}>
+                        {formatBytes(uploadState.fileLoadedBytes)} de {formatBytes(uploadState.fileTotalBytes)} ({uploadState.filePercent}%)
+                        {uploadState.total > 1 && uploadState.totalBatchBytes > 0 ? ` • Total: ${formatBytes(uploadState.totalLoadedBytes)} de ${formatBytes(uploadState.totalBatchBytes)}` : ''}
+                    </Text>
                 </View>
             )}
 
@@ -1934,14 +2132,35 @@ function MainApp() {
 
                         {/* Progress Bar inside modal */}
                         {shareUploadState.active && (
-                            <View style={{ width: '100%', marginBottom: 15 }}>
-                                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
-                                    <Text style={{ color: '#fff', fontSize: 12 }}>Uploading {shareUploadState.current} of {shareUploadState.total}...</Text>
-                                    <Text style={{ color: '#3b82f6', fontSize: 12, fontWeight: 'bold' }}>{shareUploadState.percent}%</Text>
+                            <View style={{ width: '100%', marginBottom: 15, backgroundColor: '#0f172a', padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#334155' }}>
+                                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                                    <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold', flex: 1, marginRight: 8 }} numberOfLines={1} ellipsizeMode="middle">
+                                        ({shareUploadState.current}/{shareUploadState.total}) {shareUploadState.currentFileName || 'Archivo'}
+                                    </Text>
+                                    <TouchableOpacity
+                                        onPress={() => {
+                                            if (activeShareUploadCancelRef.current) {
+                                                activeShareUploadCancelRef.current();
+                                            }
+                                        }}
+                                        style={{ backgroundColor: '#ef4444', borderRadius: 4, paddingHorizontal: 8, paddingVertical: 2 }}
+                                    >
+                                        <Text style={{ color: '#fff', fontSize: 11, fontWeight: 'bold' }}>✕ Cancelar</Text>
+                                    </TouchableOpacity>
                                 </View>
-                                <View style={{ height: 4, backgroundColor: '#334155', borderRadius: 2, overflow: 'hidden' }}>
-                                    <View style={{ width: `${shareUploadState.percent}%`, height: '100%', backgroundColor: '#3b82f6' }} />
+                                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                                    <Text style={{ color: '#94a3b8', fontSize: 11 }}>{shareUploadState.statusText || 'Subiendo...'}</Text>
+                                    <Text style={{ color: '#3b82f6', fontSize: 12, fontWeight: 'bold' }}>
+                                        {shareUploadState.overallPercent || shareUploadState.filePercent || 0}%
+                                    </Text>
                                 </View>
+                                <View style={{ height: 6, backgroundColor: '#334155', borderRadius: 3, overflow: 'hidden' }}>
+                                    <View style={{ width: `${Math.min(100, Math.max(0, shareUploadState.overallPercent || shareUploadState.filePercent || 0))}%`, height: '100%', backgroundColor: '#3b82f6' }} />
+                                </View>
+                                <Text style={{ color: '#94a3b8', fontSize: 10, marginTop: 5 }}>
+                                    {formatBytes(shareUploadState.fileLoadedBytes)} de {formatBytes(shareUploadState.fileTotalBytes)} ({shareUploadState.filePercent}%)
+                                    {shareUploadState.total > 1 && shareUploadState.totalBatchBytes > 0 ? ` • Total: ${formatBytes(shareUploadState.totalLoadedBytes)} de ${formatBytes(shareUploadState.totalBatchBytes)}` : ''}
+                                </Text>
                             </View>
                         )}
 

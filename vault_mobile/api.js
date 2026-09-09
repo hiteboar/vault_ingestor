@@ -1,6 +1,6 @@
 import axios from 'axios';
 import * as SecureStore from 'expo-secure-store';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { startUpload, onProgress, onCompleted, onError, cancelUpload } from 'rn-background-upload';
 
 const TOKEN_KEY = 'vault_device_token';
@@ -87,7 +87,256 @@ export const getThumbUrl = async (item) => {
     return { uri: `${url}/api/media/thumbnail/${item.id}?token=${token}`, headers: { 'X-Device-Token': token } };
 };
 
-export const uploadFile = async (uri, name, mimeType, folder, originalDate, onProgressCallback, onCancelCallback) => {
+const CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB per chunk
+const CHUNK_THRESHOLD = 5 * 1024 * 1024; // Files >= 5MB use chunked upload
+const MAX_CHUNK_RETRIES = 3;
+
+/**
+ * Uploads large files in chunks of 5MB with automatic retry, cancellation,
+ * and immediate server-side cleanup if connection is lost.
+ */
+export const uploadFileChunked = async (uri, name, mimeType, folder, originalDate, onProgressCallback, onCancelCallback) => {
+    const { url, token } = await getConnection();
+    if (!url) throw new Error('Not connected');
+
+    // 1. Determine exact file size
+    let totalSize = 0;
+    let effectiveUri = uri;
+    let createdTempProbe = false;
+
+    try {
+        const info = await FileSystem.getInfoAsync(uri);
+        if (info.exists && typeof info.size === 'number' && info.size > 0) {
+            totalSize = info.size;
+        }
+    } catch (_) {}
+
+    // For content:// URIs where size may be reported as 0 by ContentResolver, copy temporarily to probe size
+    if (totalSize === 0) {
+        try {
+            const probeUri = `${FileSystem.cacheDirectory}probe_${Date.now()}_${name}`;
+            await FileSystem.copyAsync({ from: uri, to: probeUri });
+            createdTempProbe = true;
+            effectiveUri = probeUri;
+            const probeInfo = await FileSystem.getInfoAsync(probeUri);
+            totalSize = probeInfo.size || 0;
+        } catch (_) {}
+    }
+
+    if (totalSize <= 0) {
+        if (createdTempProbe) {
+            try { await FileSystem.deleteAsync(effectiveUri, { idempotent: true }); } catch (_) {}
+        }
+        // Fallback to direct upload if size cannot be determined
+        return uploadFileDirect(uri, name, mimeType, folder, originalDate, onProgressCallback, onCancelCallback);
+    }
+
+    const totalChunks = Math.max(1, Math.ceil(totalSize / CHUNK_SIZE));
+
+    let isCancelled = false;
+    let activeUploadId = null;
+    let currentTempChunk = null;
+
+    if (onCancelCallback) {
+        onCancelCallback(async () => {
+            isCancelled = true;
+            if (currentTempChunk) {
+                try { await FileSystem.deleteAsync(currentTempChunk, { idempotent: true }); } catch (_) {}
+            }
+            if (createdTempProbe) {
+                try { await FileSystem.deleteAsync(effectiveUri, { idempotent: true }); } catch (_) {}
+            }
+            if (activeUploadId) {
+                try {
+                    await fetch(`${url}/api/upload/chunk/cancel`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Device-Token': token
+                        },
+                        body: JSON.stringify({ upload_id: activeUploadId })
+                    });
+                } catch (_) {}
+            }
+        });
+    }
+
+    try {
+        // 2. Initialize chunk session on server
+        const initResp = await fetch(`${url}/api/upload/chunk/init`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Device-Token': token
+            },
+            body: JSON.stringify({
+                filename: name,
+                total_size: totalSize,
+                chunk_size: CHUNK_SIZE,
+                total_chunks: totalChunks,
+                context: folder,
+                original_date: originalDate || null
+            })
+        });
+
+        if (!initResp.ok) {
+            const errBody = await initResp.text();
+            throw new Error(`Error al iniciar subida (${initResp.status}): ${errBody}`);
+        }
+
+        const initData = await initResp.json();
+        const uploadId = initData.upload_id;
+        activeUploadId = uploadId;
+
+        // 3. Upload each chunk sequentially with retry policy
+        let uploadedBytesSoFar = 0;
+
+        for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
+            if (isCancelled) {
+                throw new Error('Upload cancelled');
+            }
+
+            const offset = chunkIdx * CHUNK_SIZE;
+            const currentChunkLength = Math.min(CHUNK_SIZE, totalSize - offset);
+            const tempChunkUri = `${FileSystem.cacheDirectory}chunk_${uploadId}_${chunkIdx}.tmp`;
+            currentTempChunk = tempChunkUri;
+
+            // Extract binary slice as base64
+            const chunkBase64 = await FileSystem.readAsStringAsync(effectiveUri, {
+                encoding: FileSystem.EncodingType.Base64,
+                position: offset,
+                length: currentChunkLength
+            });
+
+            // Write slice to temporary cache file
+            await FileSystem.writeAsStringAsync(tempChunkUri, chunkBase64, {
+                encoding: FileSystem.EncodingType.Base64
+            });
+
+            let chunkSuccess = false;
+            let lastErr = null;
+
+            for (let attempt = 1; attempt <= MAX_CHUNK_RETRIES; attempt++) {
+                if (isCancelled) break;
+                try {
+                    const uploadRes = await FileSystem.uploadAsync(
+                        `${url}/api/upload/chunk`,
+                        tempChunkUri,
+                        {
+                            httpMethod: 'POST',
+                            uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+                            fieldName: 'chunk',
+                            parameters: {
+                                upload_id: uploadId,
+                                chunk_index: String(chunkIdx)
+                            },
+                            headers: {
+                                'X-Device-Token': token
+                            }
+                        }
+                    );
+
+                    if (uploadRes && uploadRes.status >= 200 && uploadRes.status < 300) {
+                        chunkSuccess = true;
+                        break;
+                    } else {
+                        lastErr = new Error(`HTTP ${uploadRes ? uploadRes.status : 'desconocido'}`);
+                    }
+                } catch (err) {
+                    lastErr = err;
+                }
+
+                // Wait with backoff before retry (1.5s, 3s, 4.5s)
+                if (attempt < MAX_CHUNK_RETRIES && !isCancelled) {
+                    await new Promise(r => setTimeout(r, attempt * 1500));
+                }
+            }
+
+            // Immediately delete local temporary chunk
+            try {
+                await FileSystem.deleteAsync(tempChunkUri, { idempotent: true });
+            } catch (_) {}
+            currentTempChunk = null;
+
+            if (isCancelled) {
+                throw new Error('Upload cancelled');
+            }
+
+            if (!chunkSuccess) {
+                // Connection lost indefinitely - notify server to clean up chunks (prevent disk leak)
+                try {
+                    await fetch(`${url}/api/upload/chunk/cancel`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Device-Token': token
+                        },
+                        body: JSON.stringify({ upload_id: uploadId })
+                    });
+                } catch (_) {}
+
+                throw new Error(`Conexión perdida tras ${MAX_CHUNK_RETRIES} intentos. La subida de "${name}" se canceló para liberar espacio (${lastErr ? lastErr.message : 'Timeout'}).`);
+            }
+
+            uploadedBytesSoFar += currentChunkLength;
+            const percent = Math.min(99, Math.round((uploadedBytesSoFar / totalSize) * 100));
+
+            if (onProgressCallback) {
+                onProgressCallback({
+                    percent,
+                    loadedBytes: uploadedBytesSoFar,
+                    totalBytes: totalSize,
+                    currentChunk: chunkIdx + 1,
+                    totalChunks,
+                    status: 'uploading'
+                });
+            }
+        }
+
+        if (isCancelled) {
+            throw new Error('Upload cancelled');
+        }
+
+        // 4. Notify UI that bytes are 100% uploaded and server is assembling/processing
+        if (onProgressCallback) {
+            onProgressCallback({
+                percent: 100,
+                loadedBytes: totalSize,
+                totalBytes: totalSize,
+                currentChunk: totalChunks,
+                totalChunks,
+                status: 'processing'
+            });
+        }
+
+        // 5. Complete assembly on server
+        const completeResp = await fetch(`${url}/api/upload/chunk/complete`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Device-Token': token
+            },
+            body: JSON.stringify({ upload_id: uploadId })
+        });
+
+        if (!completeResp.ok) {
+            const errText = await completeResp.text();
+            throw new Error(`Error al ensamblar archivo ${name}: HTTP ${completeResp.status} - ${errText}`);
+        }
+
+        return await completeResp.json();
+    } finally {
+        if (createdTempProbe) {
+            try { await FileSystem.deleteAsync(effectiveUri, { idempotent: true }); } catch (_) {}
+        }
+    }
+};
+
+/**
+ * Direct multipart upload using rn-background-upload with extended 1-hour timeouts
+ * for smaller files (< 5MB).
+ */
+export const uploadFileDirect = async (uri, name, mimeType, folder, originalDate, onProgressCallback, onCancelCallback) => {
     const { url, token } = await getConnection();
     if (!url) throw new Error('Not connected');
 
@@ -121,6 +370,10 @@ export const uploadFile = async (uri, name, mimeType, folder, originalDate, onPr
             },
             parameters,
             notification: { enabled: false }, // We use expo-notifications ourselves
+            connectTimeout: 60,
+            writeTimeout: 3600,
+            readTimeout: 3600,
+            maxRetries: 3,
         }).then((id) => {
             uploadId = id;
 
@@ -133,7 +386,14 @@ export const uploadFile = async (uri, name, mimeType, folder, originalDate, onPr
 
             progressSub = onProgress((event) => {
                 if (event.id === uploadId && onProgressCallback) {
-                    onProgressCallback(event.progress);
+                    const loaded = parseInt(event.uploadedBytes, 10) || 0;
+                    const total = parseInt(event.totalBytes, 10) || 0;
+                    onProgressCallback({
+                        percent: event.progress,
+                        loadedBytes: loaded,
+                        totalBytes: total,
+                        status: event.progress >= 100 ? 'processing' : 'uploading'
+                    });
                 }
             });
 
@@ -167,6 +427,28 @@ export const uploadFile = async (uri, name, mimeType, folder, originalDate, onPr
             reject(new Error(err.message || 'Could not start upload'));
         });
     });
+};
+
+/**
+ * Intelligent file upload router:
+ * Automatically uses chunked upload for files >= 5MB (bypassing Cloudflare 100MB body limits and socket timeouts),
+ * or direct background upload with 1h timeouts for smaller files.
+ */
+export const uploadFile = async (uri, name, mimeType, folder, originalDate, onProgressCallback, onCancelCallback) => {
+    let fileSize = 0;
+    try {
+        const info = await FileSystem.getInfoAsync(uri);
+        if (info.exists && typeof info.size === 'number' && info.size > 0) {
+            fileSize = info.size;
+        }
+    } catch (_) {}
+
+    // Files >= 5MB use chunked upload. Files < 5MB (or unknown) use chunked if large or direct.
+    if (fileSize >= CHUNK_THRESHOLD || fileSize === 0) {
+        return uploadFileChunked(uri, name, mimeType, folder, originalDate, onProgressCallback, onCancelCallback);
+    } else {
+        return uploadFileDirect(uri, name, mimeType, folder, originalDate, onProgressCallback, onCancelCallback);
+    }
 };
 
 

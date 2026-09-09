@@ -79,6 +79,7 @@ def get_robust_path(target_path: Path, fallback_subdir: str) -> Path:
 SAFE_STORAGE_DIR = get_robust_path(STORAGE_DIR, "storage")
 META_LOG = Path(os.getenv("META_LOG", str(SAFE_STORAGE_DIR / "metadata.jsonl"))).resolve()
 CACHE_DIR = get_robust_path(STORAGE_DIR / ".cache" / "thumbnails", "thumbnails")
+CHUNKS_DIR = get_robust_path(STORAGE_DIR / ".upload_chunks", "upload_chunks")
 AUDIT_LOG = SAFE_STORAGE_DIR / "audit.log"
 ENV_PATH = BASE_DIR / ".env"
 RECOVERY_FILE = BASE_DIR / "vault_internal" / ".recovery_token"
@@ -89,7 +90,7 @@ auth = AuthManager(get_robust_path(STORAGE_DIR / ".vault", "vault_auth"))
 
 def reinitialize_config():
     """Dynamically re-initializes configuration variables after .env has changed."""
-    global STORAGE_DIR, SAFE_STORAGE_DIR, META_LOG, CACHE_DIR, AUDIT_LOG, auth
+    global STORAGE_DIR, SAFE_STORAGE_DIR, META_LOG, CACHE_DIR, CHUNKS_DIR, AUDIT_LOG, auth
     from dotenv import load_dotenv
     load_dotenv(override=True)
     
@@ -97,6 +98,7 @@ def reinitialize_config():
     SAFE_STORAGE_DIR = get_robust_path(STORAGE_DIR, "storage")
     META_LOG = Path(os.getenv("META_LOG", str(SAFE_STORAGE_DIR / "metadata.jsonl"))).resolve()
     CACHE_DIR = get_robust_path(STORAGE_DIR / ".cache" / "thumbnails", "thumbnails")
+    CHUNKS_DIR = get_robust_path(STORAGE_DIR / ".upload_chunks", "upload_chunks")
     AUDIT_LOG = SAFE_STORAGE_DIR / "audit.log"
     
     # Reinitialize auth manager
@@ -137,6 +139,34 @@ def maintain_cache(cache_dir: Path, max_size_mb: int = 500):
             print(f"[CACHE] Automatic cleanup: {len(to_delete)} thumbnails removed.")
     except Exception as e:
         print(f"[CACHE_ERROR] Error en mantenimiento: {e}")
+
+def cleanup_orphaned_chunks(max_age_seconds: int = 7200):
+    """Deletes incomplete chunk upload sessions that have been inactive for longer than max_age_seconds."""
+    try:
+        if not CHUNKS_DIR.exists():
+            return
+        now = time.time()
+        for session_dir in CHUNKS_DIR.iterdir():
+            if session_dir.is_dir():
+                session_meta_file = session_dir / "session.json"
+                last_activity = None
+                if session_meta_file.exists():
+                    try:
+                        with open(session_meta_file, "r", encoding="utf-8") as f:
+                            meta = json.load(f)
+                        last_activity = meta.get("last_activity") or meta.get("created_at")
+                    except Exception:
+                        pass
+                if last_activity is None:
+                    try:
+                        last_activity = session_dir.stat().st_mtime
+                    except Exception:
+                        last_activity = now
+                if now - last_activity > max_age_seconds:
+                    shutil.rmtree(session_dir, ignore_errors=True)
+                    print(f"[CHUNKS] Cleaned up expired upload session: {session_dir.name}")
+    except Exception as e:
+        print(f"[CHUNKS_ERROR] Failed during cleanup_orphaned_chunks: {e}")
 
 async def verify_device(x_device_token: Optional[str] = Header(None)):
     """Simple security check for linked devices."""
@@ -545,6 +575,9 @@ cloudflare_tunnel = None
 async def startup_event():
     # Iniciar caché de metadatos
     metadata_cache.load()
+    
+    # Limpieza de fragmentos huérfanos/expirados de subidas previas
+    cleanup_orphaned_chunks()
     
     # Generar token de recuperación local
     try:
@@ -1394,6 +1427,215 @@ async def upload_file(
         return {"status": "success", "id": item["id"], "fallback_used": fallback_used, "timestamp": final_timestamp}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+class ChunkInitRequest(BaseModel):
+    filename: str
+    total_size: int
+    chunk_size: int
+    total_chunks: int
+    context: str = "root"
+    original_date: Optional[str] = None
+
+class ChunkCompleteRequest(BaseModel):
+    upload_id: str
+
+class ChunkCancelRequest(BaseModel):
+    upload_id: str
+
+@app.post("/api/upload/chunk/init")
+async def init_chunk_upload(
+    req: ChunkInitRequest,
+    x_device_token: str = Header(...)
+):
+    """Initializes a chunked upload session for large files."""
+    cleanup_orphaned_chunks()
+    device = auth.get_device_info(x_device_token)
+    if not device:
+        raise HTTPException(status_code=401, detail="Invalid token")
+        
+    role = device.get("role", "standard")
+    allowed_folders = device.get("allowed_folders", [])
+    
+    if role != "admin" and req.context not in allowed_folders and "*" not in allowed_folders:
+        raise HTTPException(status_code=403, detail="No permission to upload to this folder")
+
+    if req.total_chunks <= 0 or req.total_size <= 0:
+        raise HTTPException(status_code=400, detail="Invalid total_chunks or total_size")
+
+    import secrets
+    upload_id = secrets.token_hex(16)
+    session_dir = CHUNKS_DIR / upload_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    
+    now = time.time()
+    session_data = {
+        "upload_id": upload_id,
+        "filename": req.filename,
+        "total_size": req.total_size,
+        "chunk_size": req.chunk_size,
+        "total_chunks": req.total_chunks,
+        "context": req.context,
+        "original_date": req.original_date,
+        "created_at": now,
+        "last_activity": now,
+        "user": device.get("name", "unknown_device"),
+        "role": role
+    }
+    with open(session_dir / "session.json", "w", encoding="utf-8") as f:
+        json.dump(session_data, f)
+        
+    return {
+        "status": "ok",
+        "upload_id": upload_id,
+        "total_chunks": req.total_chunks,
+        "chunk_size": req.chunk_size
+    }
+
+@app.post("/api/upload/chunk")
+async def upload_chunk(
+    upload_id: str = Form(...),
+    chunk_index: int = Form(...),
+    chunk: UploadFile = File(...),
+    x_device_token: str = Header(...)
+):
+    """Receives and stores a single chunk of a chunked upload."""
+    device = auth.get_device_info(x_device_token)
+    if not device:
+        raise HTTPException(status_code=401, detail="Invalid token")
+        
+    session_dir = CHUNKS_DIR / upload_id
+    session_file = session_dir / "session.json"
+    if not session_dir.exists() or not session_file.exists():
+        raise HTTPException(status_code=404, detail="Upload session not found or expired")
+        
+    try:
+        with open(session_file, "r", encoding="utf-8") as f:
+            session_data = json.load(f)
+            
+        total_chunks = session_data.get("total_chunks", 0)
+        if chunk_index < 0 or chunk_index >= total_chunks:
+            raise HTTPException(status_code=400, detail=f"Chunk index {chunk_index} out of range (0-{total_chunks-1})")
+            
+        chunk_path = session_dir / f"chunk_{chunk_index}"
+        with open(chunk_path, "wb") as buffer:
+            shutil.copyfileobj(chunk.file, buffer)
+            
+        # Update last_activity
+        session_data["last_activity"] = time.time()
+        with open(session_file, "w", encoding="utf-8") as f:
+            json.dump(session_data, f)
+            
+        return {"status": "ok", "chunk_index": chunk_index}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error saving chunk: {e}")
+
+@app.post("/api/upload/chunk/complete")
+async def complete_chunk_upload(
+    req: ChunkCompleteRequest,
+    x_device_token: str = Header(...)
+):
+    """Verifies and assembles all uploaded chunks into the final destination file."""
+    device = auth.get_device_info(x_device_token)
+    if not device:
+        raise HTTPException(status_code=401, detail="Invalid token")
+        
+    session_dir = CHUNKS_DIR / req.upload_id
+    session_file = session_dir / "session.json"
+    if not session_dir.exists() or not session_file.exists():
+        raise HTTPException(status_code=404, detail="Upload session not found or expired")
+        
+    try:
+        import secrets
+        from datetime import datetime
+        
+        with open(session_file, "r", encoding="utf-8") as f:
+            session_data = json.load(f)
+            
+        total_chunks = session_data["total_chunks"]
+        context = session_data.get("context", "root")
+        filename = session_data.get("filename", "upload.bin")
+        original_date = session_data.get("original_date")
+        
+        # Verify all chunks are present
+        for i in range(total_chunks):
+            chunk_file = session_dir / f"chunk_{i}"
+            if not chunk_file.exists():
+                raise HTTPException(status_code=400, detail=f"Missing chunk {i} of {total_chunks}")
+                
+        # Determine target folder
+        base_upload = STORAGE_DIR / "uploaded_files"
+        if context == "root":
+            now = datetime.now()
+            save_folder = base_upload / str(now.year) / f"{now.month:02d}"
+        else:
+            save_folder = base_upload / context
+        save_folder.mkdir(parents=True, exist_ok=True)
+        
+        safe_filename = Path(filename).name if filename else f"upload_{int(time.time())}.bin"
+        file_path = save_folder / safe_filename
+        if file_path.exists():
+            file_path = save_folder / f"{int(time.time())}_{safe_filename}"
+            
+        # Assemble chunks sequentially into destination
+        with open(file_path, "wb") as outfile:
+            for i in range(total_chunks):
+                chunk_file = session_dir / f"chunk_{i}"
+                with open(chunk_file, "rb") as infile:
+                    shutil.copyfileobj(infile, outfile, length=1024*1024)
+                    
+        # Extract metadata timestamp
+        final_timestamp = extract_metadata_timestamp(file_path)
+        fallback_used = False
+        if not final_timestamp and original_date:
+            final_timestamp = original_date
+        if not final_timestamp:
+            final_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            fallback_used = True
+            
+        gps_data = extract_gps(file_path)
+        item = {
+            "id": secrets.token_hex(8),
+            "name": Path(filename).name,
+            "saved_path": str(file_path),
+            "timestamp": final_timestamp,
+            "source": "mobile_chunked",
+            "context": context,
+            "gps": gps_data,
+            "gps_scanned": True
+        }
+        with open(META_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(item) + "\n")
+            
+        metadata_cache.update(item)
+        update_folder_meta(context)
+        log_audit("UPLOAD_CHUNKED", file_path, device)
+        
+        # Clean up session directory immediately to free storage
+        shutil.rmtree(session_dir, ignore_errors=True)
+        
+        return {"status": "success", "id": item["id"], "fallback_used": fallback_used, "timestamp": final_timestamp}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error completing chunked upload: {e}")
+
+@app.post("/api/upload/chunk/cancel")
+async def cancel_chunk_upload(
+    req: ChunkCancelRequest,
+    x_device_token: str = Header(...)
+):
+    """Cancels a chunked upload and immediately cleans up all received chunks."""
+    device = auth.get_device_info(x_device_token)
+    if not device:
+        raise HTTPException(status_code=401, detail="Invalid token")
+        
+    session_dir = CHUNKS_DIR / req.upload_id
+    if session_dir.exists():
+        shutil.rmtree(session_dir, ignore_errors=True)
+        print(f"[CHUNKS] Upload session {req.upload_id} cancelled and cleaned up.")
+    return {"status": "cancelled", "upload_id": req.upload_id}
 
 @app.delete("/api/items/{item_id}")
 async def delete_item(item_id: str, x_device_token: str = Header(...)):
